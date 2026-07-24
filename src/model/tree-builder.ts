@@ -9,6 +9,8 @@ import type {
 const GESTURE_WINDOW_MS = 2000;
 /** Ignore duplicate click/keydown hooks from the same physical action. */
 const GESTURE_DEDUP_MS = 400;
+/** Collapse duplicate empty Document roots for the same URL within this window. */
+const ROOT_DEDUP_MS = 15_000;
 
 export interface TreeState {
   nodes: Map<string, RrNode>;
@@ -21,6 +23,8 @@ export interface TreeState {
   frameToDocument: Map<string, string>;
   /** targetId → most recent tree id (for attaching script_nav children). */
   targetToActiveTree: Map<string, string>;
+  /** Duplicate provisional node ids → canonical node id. */
+  nodeIdAlias: Map<string, string>;
   recentGestures: UserGesture[];
 }
 
@@ -32,8 +36,123 @@ export function createTreeState(): TreeState {
     loaderToDocument: new Map(),
     frameToDocument: new Map(),
     targetToActiveTree: new Map(),
+    nodeIdAlias: new Map(),
     recentGestures: [],
   };
+}
+
+function normalizeUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
+function resolveCanonicalId(state: TreeState, id: string): string {
+  let cur = id;
+  const seen = new Set<string>();
+  while (state.nodeIdAlias.has(cur) && !seen.has(cur)) {
+    seen.add(cur);
+    cur = state.nodeIdAlias.get(cur)!;
+  }
+  return cur;
+}
+
+/** Empty Document root with same URL/target created recently (Chrome provisional loads). */
+function findReusableEmptyRoot(
+  state: TreeState,
+  node: RrNode,
+): RrNode | undefined {
+  if (!isDocument(node)) return undefined;
+  const url = normalizeUrl(node.url);
+  const now = node.createdAt;
+  let best: RrNode | undefined;
+  for (const tree of state.trees.values()) {
+    if (node.targetId && tree.targetId && tree.targetId !== node.targetId) {
+      continue;
+    }
+    const root = state.nodes.get(tree.rootId);
+    if (!root || !isDocument(root)) continue;
+    if (root.id === node.id) continue;
+    if (normalizeUrl(root.url) !== url) continue;
+    if (root.children.length > 0) continue;
+    if (now - root.createdAt > ROOT_DEDUP_MS) continue;
+    if (!best || root.createdAt < best.createdAt) best = root;
+  }
+  return best;
+}
+
+/** Drop other empty same-URL roots once one navigation tree starts growing. */
+function pruneEmptyDuplicateRoots(
+  state: TreeState,
+  keep: RrNode,
+): TreePatch[] {
+  if (!isDocument(keep) || !keep.treeId) return [];
+  const url = normalizeUrl(keep.url);
+  const patches: TreePatch[] = [];
+  for (const tree of [...state.trees.values()]) {
+    if (tree.id === keep.treeId) continue;
+    if (keep.targetId && tree.targetId && tree.targetId !== keep.targetId) {
+      continue;
+    }
+    const root = state.nodes.get(tree.rootId);
+    if (!root || !isDocument(root)) continue;
+    if (normalizeUrl(root.url) !== url) continue;
+    if (root.children.length > 0) continue;
+    if (deleteTree(state, tree.id)) {
+      patches.push({ op: "delete", treeId: tree.id, ts: Date.now() });
+    }
+  }
+  return patches;
+}
+
+function mergeIntoCanonical(
+  state: TreeState,
+  canonical: RrNode,
+  incoming: RrNode,
+): RrNode {
+  if (incoming.id !== canonical.id) {
+    state.nodeIdAlias.set(incoming.id, canonical.id);
+  }
+  const merged: RrNode = {
+    ...canonical,
+    ...incoming,
+    id: canonical.id,
+    children: canonical.children,
+    parentId: canonical.parentId,
+    edgeType: canonical.edgeType ?? incoming.edgeType,
+    treeId: canonical.treeId,
+    createdAt: canonical.createdAt,
+    requestHeaders: {
+      ...canonical.requestHeaders,
+      ...incoming.requestHeaders,
+    },
+    responseHeaders: {
+      ...canonical.responseHeaders,
+      ...incoming.responseHeaders,
+    },
+    requestBody: incoming.requestBody ?? canonical.requestBody,
+    responseBody: incoming.responseBody ?? canonical.responseBody,
+    bodyPreview: incoming.bodyPreview ?? canonical.bodyPreview,
+    bodyRef: incoming.bodyRef ?? canonical.bodyRef,
+  };
+  state.nodes.set(merged.id, merged);
+  state.requestIdToNodeId.set(incoming.requestId, merged.id);
+  state.requestIdToNodeId.set(merged.requestId, merged.id);
+  indexDocument(state, merged);
+  if (merged.treeId) {
+    const tree = state.trees.get(merged.treeId);
+    if (tree) {
+      tree.updatedAt = merged.updatedAt;
+      if (merged.targetId) {
+        state.targetToActiveTree.set(merged.targetId, merged.treeId);
+      }
+    }
+  }
+  return merged;
 }
 
 export function recordGesture(state: TreeState, g: UserGesture): void {
