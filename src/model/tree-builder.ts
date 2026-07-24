@@ -61,8 +61,12 @@ function resolveCanonicalId(state: TreeState, id: string): string {
   return cur;
 }
 
-/** Empty Document root with same URL/target created recently (Chrome provisional loads). */
-function findReusableEmptyRoot(
+/**
+ * Find an existing Document for the same URL/target to absorb a provisional load.
+ * Prefers a Document that already has children (the real navigation), including
+ * redirect-chain finals that are not tree.rootId.
+ */
+function findCanonicalDocument(
   state: TreeState,
   node: RrNode,
 ): RrNode | undefined {
@@ -70,43 +74,87 @@ function findReusableEmptyRoot(
   const url = normalizeUrl(node.url);
   const now = node.createdAt;
   let best: RrNode | undefined;
-  for (const tree of state.trees.values()) {
-    if (node.targetId && tree.targetId && tree.targetId !== node.targetId) {
+  let bestScore = -1;
+  for (const cand of state.nodes.values()) {
+    if (!isDocument(cand)) continue;
+    if (cand.id === node.id) continue;
+    if (node.targetId && cand.targetId && cand.targetId !== node.targetId) {
       continue;
     }
-    const root = state.nodes.get(tree.rootId);
-    if (!root || !isDocument(root)) continue;
-    if (root.id === node.id) continue;
-    if (normalizeUrl(root.url) !== url) continue;
-    if (root.children.length > 0) continue;
-    if (now - root.createdAt > ROOT_DEDUP_MS) continue;
-    if (!best || root.createdAt < best.createdAt) best = root;
+    if (normalizeUrl(cand.url) !== url) continue;
+    // Only absorb Chrome provisional duplicates for an in-flight navigation.
+    if (now - cand.createdAt > ROOT_DEDUP_MS) continue;
+    // Higher score = prefer grown docs, then docs already in a tree, then older.
+    const score =
+      cand.children.length * 1_000_000 +
+      (cand.treeId ? 10_000 : 0) +
+      (cand.hasResponse ? 100 : 0) +
+      Math.max(0, ROOT_DEDUP_MS - (now - cand.createdAt));
+    if (score > bestScore) {
+      bestScore = score;
+      best = cand;
+    }
   }
   return best;
 }
 
-/** Drop other empty same-URL roots once one navigation tree starts growing. */
+/**
+ * Delete empty Document-root trees whose URL matches `keep` (or any grown
+ * same-URL Document in keep's target). Surviving tree is the one that grew.
+ */
 function pruneEmptyDuplicateRoots(
   state: TreeState,
   keep: RrNode,
 ): TreePatch[] {
-  if (!isDocument(keep) || !keep.treeId) return [];
+  if (!isDocument(keep)) return [];
   const url = normalizeUrl(keep.url);
   const patches: TreePatch[] = [];
   for (const tree of [...state.trees.values()]) {
-    if (tree.id === keep.treeId) continue;
+    if (keep.treeId && tree.id === keep.treeId) continue;
     if (keep.targetId && tree.targetId && tree.targetId !== keep.targetId) {
       continue;
     }
     const root = state.nodes.get(tree.rootId);
     if (!root || !isDocument(root)) continue;
-    if (normalizeUrl(root.url) !== url) continue;
+    // Empty root whose URL equals keep, OR empty root while keep is same-URL grown doc.
+    const rootUrl = normalizeUrl(root.url);
+    if (rootUrl !== url) continue;
     if (root.children.length > 0) continue;
+    // Never delete the tree that contains the canonical keep node.
+    if (keep.treeId && tree.id === keep.treeId) continue;
+    if (tree.rootId === keep.id) continue;
     if (deleteTree(state, tree.id)) {
       patches.push({ op: "delete", treeId: tree.id, ts: Date.now() });
     }
   }
   return patches;
+}
+
+/** After any Document activity, drop leftover empty same-URL root trees. */
+function pruneEmptyRootsForUrl(
+  state: TreeState,
+  url: string,
+  targetId?: string,
+): TreePatch[] {
+  const norm = normalizeUrl(url);
+  // Prefer keeping a tree that has a grown Document for this URL.
+  let keep: RrNode | undefined;
+  for (const n of state.nodes.values()) {
+    if (!isDocument(n)) continue;
+    if (normalizeUrl(n.url) !== norm) continue;
+    if (targetId && n.targetId && n.targetId !== targetId) continue;
+    if (!keep) keep = n;
+    else if (n.children.length > keep.children.length) keep = n;
+    else if (
+      n.children.length === keep.children.length &&
+      (n.hasResponse && !keep.hasResponse)
+    ) {
+      keep = n;
+    }
+  }
+  if (!keep) return [];
+  // If nothing has grown yet, keep the oldest root and prune other empties.
+  return pruneEmptyDuplicateRoots(state, keep);
 }
 
 function mergeIntoCanonical(
@@ -346,36 +394,67 @@ function newTreeId(): string {
  */
 export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
   const patches: TreePatch[] = [];
-  const existing = state.nodes.get(incoming.id);
+
+  // Follow aliases for folded provisional nodes. Do NOT map by requestId alone:
+  // Chrome redirect hops reuse the same CDP requestId with new node identities.
+  const aliased = resolveCanonicalId(state, incoming.id);
+  const byRequest = state.requestIdToNodeId.get(incoming.requestId);
+  let canonicalIncomingId = aliased;
+  if (
+    byRequest &&
+    (byRequest === incoming.id ||
+      byRequest === aliased ||
+      resolveCanonicalId(state, byRequest) === aliased)
+  ) {
+    canonicalIncomingId = resolveCanonicalId(state, byRequest);
+  }
+  const working: RrNode =
+    canonicalIncomingId !== incoming.id
+      ? { ...incoming, id: canonicalIncomingId }
+      : incoming;
+
+  const existing = state.nodes.get(working.id);
 
   // Merge updates for known nodes (response / finish).
   if (existing) {
-    const merged: RrNode = {
-      ...existing,
-      ...incoming,
-      children: existing.children,
-      parentId: existing.parentId ?? incoming.parentId,
-      edgeType: existing.edgeType ?? incoming.edgeType,
-      treeId: existing.treeId,
-      requestHeaders: {
-        ...existing.requestHeaders,
-        ...incoming.requestHeaders,
-      },
-      responseHeaders: {
-        ...existing.responseHeaders,
-        ...incoming.responseHeaders,
-      },
-      requestBody: incoming.requestBody ?? existing.requestBody,
-      responseBody: incoming.responseBody ?? existing.responseBody,
-      bodyPreview: incoming.bodyPreview ?? existing.bodyPreview,
-      bodyRef: incoming.bodyRef ?? existing.bodyRef,
-    };
-    state.nodes.set(merged.id, merged);
-    state.requestIdToNodeId.set(merged.requestId, merged.id);
+    const merged = mergeIntoCanonical(state, existing, working);
     if (merged.treeId) {
-      const tree = state.trees.get(merged.treeId);
-      if (tree) {
-        tree.updatedAt = merged.updatedAt;
+      patches.push({
+        op: "upsert",
+        treeId: merged.treeId,
+        node: clone(merged),
+        ts: Date.now(),
+      });
+    }
+    // Cancelled provisional Document roots with no children → drop the tree.
+    if (
+      merged.failed &&
+      merged.finished &&
+      isDocument(merged) &&
+      !merged.parentId &&
+      merged.children.length === 0 &&
+      merged.treeId
+    ) {
+      const treeId = merged.treeId;
+      if (deleteTree(state, treeId)) {
+        patches.push({ op: "delete", treeId, ts: Date.now() });
+      }
+      return patches;
+    }
+    if (isDocument(merged)) {
+      patches.push(
+        ...pruneEmptyRootsForUrl(state, merged.url, merged.targetId),
+      );
+    }
+    return patches;
+  }
+
+  // Provisional Document for a URL we already track → fold into that Document.
+  if (isDocument(working)) {
+    const canonical = findCanonicalDocument(state, working);
+    if (canonical) {
+      const merged = mergeIntoCanonical(state, canonical, working);
+      if (merged.treeId) {
         patches.push({
           op: "upsert",
           treeId: merged.treeId,
@@ -383,15 +462,18 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
           ts: Date.now(),
         });
       }
+      patches.push(
+        ...pruneEmptyRootsForUrl(state, merged.url, merged.targetId),
+      );
+      return patches;
     }
-    return patches;
   }
 
-  const { parentId, edgeType, newRoot } = resolveParent(state, incoming);
+  const { parentId, edgeType, newRoot } = resolveParent(state, working);
   const node: RrNode = {
-    ...incoming,
-    parentId: parentId ?? incoming.parentId,
-    edgeType: incoming.edgeType ?? edgeType,
+    ...working,
+    parentId: parentId ?? working.parentId,
+    edgeType: working.edgeType ?? edgeType,
     children: [],
   };
 
@@ -399,7 +481,6 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
     const treeId = newTreeId();
     node.treeId = treeId;
     node.parentId = undefined;
-    // Keep edgeType for roots that came from user_interaction for UI hints.
     const tree: Tree = {
       id: treeId,
       rootId: node.id,
@@ -418,6 +499,9 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
       node: clone(node),
       ts: Date.now(),
     });
+    if (isDocument(node)) {
+      patches.push(...pruneEmptyRootsForUrl(state, node.url, node.targetId));
+    }
     return patches;
   }
 
@@ -450,6 +534,23 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
       node: clone(parent),
       ts: Date.now(),
     });
+    // Prune empty same-URL roots against the nearest Document ancestor.
+    let doc: RrNode | undefined = isDocument(parent)
+      ? parent
+      : state.nodes.get(parent.parentId ?? "");
+    while (doc && !isDocument(doc) && doc.parentId) {
+      doc = state.nodes.get(doc.parentId);
+    }
+    if (doc && isDocument(doc)) {
+      patches.push(...pruneEmptyRootsForUrl(state, doc.url, doc.targetId));
+    }
+    // Also prune by tree root Document URL when redirect chain differs.
+    const treeRoot = tree ? state.nodes.get(tree.rootId) : undefined;
+    if (treeRoot && isDocument(treeRoot) && treeRoot.id !== doc?.id) {
+      patches.push(
+        ...pruneEmptyRootsForUrl(state, treeRoot.url, treeRoot.targetId),
+      );
+    }
   }
 
   return patches;
@@ -519,6 +620,12 @@ export function deleteTree(state: TreeState, treeId: string): boolean {
     if (activeTreeId === treeId) state.targetToActiveTree.delete(targetId);
   }
 
+  for (const [alias, canonical] of [...state.nodeIdAlias.entries()]) {
+    if (nodeIds.includes(alias) || nodeIds.includes(canonical)) {
+      state.nodeIdAlias.delete(alias);
+    }
+  }
+
   state.trees.delete(treeId);
   return true;
 }
@@ -532,6 +639,7 @@ export function clearTrees(state: TreeState): number {
   state.loaderToDocument.clear();
   state.frameToDocument.clear();
   state.targetToActiveTree.clear();
+  state.nodeIdAlias.clear();
   return count;
 }
 

@@ -203,6 +203,163 @@ describe("RrAssembler request body", () => {
   });
 });
 
+describe("duplicate Document roots", () => {
+  it("merges provisional same-URL roots and prunes empties when one grows", () => {
+    resetAssemblerSeq();
+    resetTreeSeq();
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "r1",
+      loaderId: "L1",
+      frameId: "F1",
+      request: { url: "https://example.com/page", method: "GET", headers: {} },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "r2",
+      loaderId: "L2",
+      frameId: "F1",
+      request: { url: "https://example.com/page", method: "GET", headers: {} },
+      timestamp: 2,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "r3",
+      loaderId: "L3",
+      frameId: "F1",
+      request: { url: "https://example.com/page", method: "GET", headers: {} },
+      timestamp: 3,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    // All three provisional Documents collapse into one root tree.
+    expect(state.trees.size).toBe(1);
+    const root = [...state.nodes.values()].find(
+      (n) => n.resourceType === "Document" && !n.parentId,
+    )!;
+    expect(root.url).toBe("https://example.com/page");
+
+    // Attach a child to the surviving root (via loader fallback after mapping).
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "css-1",
+      loaderId: "L1",
+      frameId: "F1",
+      request: {
+        url: "https://example.com/app.css",
+        method: "GET",
+        headers: {},
+      },
+      timestamp: 4,
+      initiator: { type: "parser" },
+      type: "Stylesheet",
+    })) {
+      integrateNode(state, a.node);
+    }
+    expect(state.trees.size).toBe(1);
+    const grown = state.nodes.get(root.id)!;
+    expect(grown.children.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("folds a late empty root into an already-grown same-URL document", () => {
+    resetAssemblerSeq();
+    resetTreeSeq();
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "real",
+      loaderId: "Lreal",
+      frameId: "F1",
+      request: { url: "https://example.com/late", method: "GET", headers: {} },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "asset",
+      loaderId: "Lreal",
+      frameId: "F1",
+      request: {
+        url: "https://example.com/late.css",
+        method: "GET",
+        headers: {},
+      },
+      timestamp: 2,
+      initiator: { type: "parser" },
+      type: "Stylesheet",
+    })) {
+      integrateNode(state, a.node);
+    }
+    expect(state.trees.size).toBe(1);
+
+    // Chrome often emits another Document for the same URL after assets start.
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "dup",
+      loaderId: "Ldup",
+      frameId: "F1",
+      request: { url: "https://example.com/late", method: "GET", headers: {} },
+      timestamp: 3,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    expect(state.trees.size).toBe(1);
+    const docs = [...state.nodes.values()].filter(
+      (n) =>
+        n.resourceType === "Document" &&
+        n.url === "https://example.com/late" &&
+        !n.parentId,
+    );
+    expect(docs.length).toBe(1);
+  });
+
+  it("deletes failed empty Document roots", () => {
+    resetAssemblerSeq();
+    resetTreeSeq();
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "fail-1",
+      loaderId: "Lx",
+      frameId: "Fx",
+      request: {
+        url: "https://example.com/gone",
+        method: "GET",
+        headers: {},
+      },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    expect(state.trees.size).toBe(1);
+    for (const a of assembler.handleLoadingFailed({
+      requestId: "fail-1",
+      timestamp: 2,
+      errorText: "net::ERR_ABORTED",
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    expect(state.trees.size).toBe(0);
+  });
+});
+
 describe("gesture consume", () => {
   it("attributes only the first Document to one gesture", () => {
     resetAssemblerSeq();
