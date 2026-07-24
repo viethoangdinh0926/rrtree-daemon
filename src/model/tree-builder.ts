@@ -218,6 +218,18 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
       parentId: existing.parentId ?? incoming.parentId,
       edgeType: existing.edgeType ?? incoming.edgeType,
       treeId: existing.treeId,
+      requestHeaders: {
+        ...existing.requestHeaders,
+        ...incoming.requestHeaders,
+      },
+      responseHeaders: {
+        ...existing.responseHeaders,
+        ...incoming.responseHeaders,
+      },
+      requestBody: incoming.requestBody ?? existing.requestBody,
+      responseBody: incoming.responseBody ?? existing.responseBody,
+      bodyPreview: incoming.bodyPreview ?? existing.bodyPreview,
+      bodyRef: incoming.bodyRef ?? existing.bodyRef,
     };
     state.nodes.set(merged.id, merged);
     state.requestIdToNodeId.set(merged.requestId, merged.id);
@@ -316,6 +328,8 @@ function clone(n: RrNode): RrNode {
     children: [...n.children],
     requestHeaders: { ...n.requestHeaders },
     responseHeaders: { ...n.responseHeaders },
+    requestBody: n.requestBody ? { ...n.requestBody } : undefined,
+    responseBody: n.responseBody ? { ...n.responseBody } : undefined,
     initiator: n.initiator ? { ...n.initiator } : undefined,
   };
 }

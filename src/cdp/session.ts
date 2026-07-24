@@ -1,5 +1,6 @@
 import CDP from "chrome-remote-interface";
 import type { Client } from "chrome-remote-interface";
+import { shouldCaptureResponseBody, truncateBody } from "../model/bodies.js";
 import { RrAssembler } from "../model/rr-assembler.js";
 import type { TreeStore } from "../model/store.js";
 import type {
@@ -8,9 +9,6 @@ import type {
   CdpRequestWillBeSent,
   CdpResponseReceived,
 } from "../model/types.js";
-
-const BODY_TYPES = new Set(["Document", "XHR", "Fetch"]);
-const BODY_MAX_BYTES = 256 * 1024;
 
 export interface CdpManagerOptions {
   host?: string;
@@ -30,6 +28,18 @@ interface TargetInfo {
   type: string;
   title?: string;
   url?: string;
+}
+
+function headersFromExtra(
+  headers: Record<string, string> | Array<{ name: string; value: string }> | undefined,
+): Record<string, string> {
+  if (!headers) return {};
+  if (Array.isArray(headers)) {
+    const out: Record<string, string> = {};
+    for (const h of headers) out[h.name] = h.value;
+    return out;
+  }
+  return { ...headers };
 }
 
 export class CdpManager {
@@ -175,8 +185,32 @@ export class CdpManager {
       client.Network.requestWillBeSent((params) => {
         this.onRequestWillBeSent(attached, params as CdpRequestWillBeSent);
       });
+      client.Network.requestWillBeSentExtraInfo((params) => {
+        const p = params as {
+          requestId: string;
+          headers?: Record<string, string>;
+        };
+        for (const ev of attached.assembler.mergeRequestExtraHeaders(
+          p.requestId,
+          headersFromExtra(p.headers),
+        )) {
+          this.store.ingest(ev.node);
+        }
+      });
       client.Network.responseReceived((params) => {
         this.onResponseReceived(attached, params as CdpResponseReceived);
+      });
+      client.Network.responseReceivedExtraInfo((params) => {
+        const p = params as {
+          requestId: string;
+          headers?: Record<string, string>;
+        };
+        for (const ev of attached.assembler.mergeResponseExtraHeaders(
+          p.requestId,
+          headersFromExtra(p.headers),
+        )) {
+          this.store.ingest(ev.node);
+        }
       });
       client.Network.loadingFinished((params) => {
         void this.onLoadingFinished(attached, params as CdpLoadingFinished);
@@ -244,32 +278,85 @@ export class CdpManager {
   ): Promise<void> {
     const events = attached.assembler.handleLoadingFinished(params);
     for (const ev of events) {
-      if (
-        this.captureBodies &&
-        BODY_TYPES.has(String(ev.node.resourceType)) &&
-        !ev.node.failed
-      ) {
-        try {
-          const { body, base64Encoded } =
-            await attached.client.Network.getResponseBody({
-              requestId: params.requestId,
-            });
-          let text = body;
-          if (base64Encoded) {
-            text = Buffer.from(body, "base64").toString("utf8");
+      if (this.captureBodies && !ev.node.failed) {
+        const method = ev.node.method.toUpperCase();
+        const needsRequestBody =
+          ev.node.requestBody?.unavailableReason === "pending" ||
+          (!ev.node.requestBody?.text &&
+            (method === "POST" || method === "PUT" || method === "PATCH"));
+        await this.captureBodiesForNode(
+          attached,
+          params.requestId,
+          String(ev.node.resourceType),
+          ev.node.mimeType,
+          needsRequestBody,
+        );
+      }
+      const latest = attached.assembler.getNode(params.requestId);
+      if (latest) this.store.ingest(latest);
+      else this.store.ingest(ev.node);
+    }
+  }
+
+  private async captureBodiesForNode(
+    attached: AttachedTarget,
+    requestId: string,
+    resourceType: string,
+    mimeType: string | undefined,
+    wantRequestBody: boolean,
+  ): Promise<void> {
+    if (wantRequestBody) {
+      try {
+        const { postData } = await attached.client.Network.getRequestPostData({
+          requestId,
+        });
+        if (postData != null && postData !== "") {
+          for (const ev of attached.assembler.setRequestBody(
+            requestId,
+            truncateBody(postData, false),
+          )) {
+            this.store.ingest(ev.node);
           }
-          if (text.length > BODY_MAX_BYTES) {
-            ev.node.bodyPreview = text.slice(0, BODY_MAX_BYTES);
-            ev.node.bodyRef = `truncated:${text.length}`;
-          } else {
-            ev.node.bodyPreview = text;
-            ev.node.bodyRef = `inline:${text.length}`;
+        } else {
+          for (const ev of attached.assembler.setRequestBody(requestId, {
+            unavailableReason: "empty",
+          })) {
+            this.store.ingest(ev.node);
           }
-        } catch {
-          /* body unavailable */
+        }
+      } catch {
+        for (const ev of attached.assembler.setRequestBody(requestId, {
+          unavailableReason: "unavailable",
+        })) {
+          this.store.ingest(ev.node);
         }
       }
-      this.store.ingest(ev.node);
+    }
+
+    if (!shouldCaptureResponseBody(String(resourceType), mimeType)) {
+      for (const ev of attached.assembler.setResponseBody(requestId, {
+        unavailableReason: "skipped_binary_or_unsupported_type",
+      })) {
+        this.store.ingest(ev.node);
+      }
+      return;
+    }
+
+    try {
+      const { body, base64Encoded } =
+        await attached.client.Network.getResponseBody({ requestId });
+      for (const ev of attached.assembler.setResponseBody(
+        requestId,
+        truncateBody(body, base64Encoded),
+      )) {
+        this.store.ingest(ev.node);
+      }
+    } catch {
+      for (const ev of attached.assembler.setResponseBody(requestId, {
+        unavailableReason: "unavailable",
+      })) {
+        this.store.ingest(ev.node);
+      }
     }
   }
 

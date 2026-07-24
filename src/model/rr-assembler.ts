@@ -1,4 +1,5 @@
 import type {
+  BodyPayload,
   CdpLoadingFailed,
   CdpLoadingFinished,
   CdpRequestWillBeSent,
@@ -22,6 +23,23 @@ function nextId(prefix: string): string {
 
 function headersOf(h: Record<string, string> | undefined): Record<string, string> {
   return h ? { ...h } : {};
+}
+
+function mergeHeaders(
+  base: Record<string, string>,
+  extra?: Record<string, string>,
+): Record<string, string> {
+  if (!extra) return { ...base };
+  return { ...base, ...extra };
+}
+
+function requestBodyFromPostData(postData?: string): BodyPayload | undefined {
+  if (postData == null || postData === "") return undefined;
+  return {
+    text: postData,
+    size: Buffer.byteLength(postData, "utf8"),
+    truncated: false,
+  };
 }
 
 export class RrAssembler {
@@ -50,7 +68,6 @@ export class RrAssembler {
     return undefined;
   }
 
-  /** All nodes ever produced in this assembler (current hop map only — callers use store). */
   handleRequestWillBeSent(ev: CdpRequestWillBeSent): AssembledEvent[] {
     const out: AssembledEvent[] = [];
     const now = Date.now();
@@ -60,16 +77,22 @@ export class RrAssembler {
       if (prev) {
         prev.status = ev.redirectResponse.status;
         prev.statusText = ev.redirectResponse.statusText;
-        prev.responseHeaders = headersOf(ev.redirectResponse.headers);
+        prev.responseHeaders = mergeHeaders(
+          prev.responseHeaders,
+          headersOf(ev.redirectResponse.headers),
+        );
         prev.mimeType = ev.redirectResponse.mimeType;
         prev.timing = ev.redirectResponse.timing;
         prev.hasResponse = true;
         prev.finished = true;
         prev.updatedAt = now;
-        out.push({ kind: "node", node: { ...prev, children: [...prev.children] }, isRedirectHop: true });
+        out.push({
+          kind: "node",
+          node: cloneNode(prev),
+          isRedirectHop: true,
+        });
         this.lastHopByRequestId.set(ev.requestId, prev.id);
       } else {
-        // Synthetic node for redirect response when we missed the original requestWillBeSent.
         const synthetic: RrNode = {
           id: nextId("rr"),
           requestId: ev.requestId,
@@ -106,6 +129,7 @@ export class RrAssembler {
       resourceType: ev.type ?? "Other",
       requestHeaders: headersOf(ev.request.headers),
       responseHeaders: {},
+      requestBody: requestBodyFromPostData(ev.request.postData),
       frameId: ev.frameId,
       loaderId: ev.loaderId,
       targetId: this.targetId,
@@ -124,15 +148,66 @@ export class RrAssembler {
       finished: false,
     };
 
-    // Wire redirect edge hint: parent is previous hop.
+    if (ev.request.hasPostData && !node.requestBody) {
+      node.requestBody = {
+        unavailableReason: "pending",
+      };
+    }
+
     if (ev.redirectResponse && this.lastHopByRequestId.has(ev.requestId)) {
       node.parentId = this.lastHopByRequestId.get(ev.requestId);
       node.edgeType = "redirect";
     }
 
     this.byRequestId.set(ev.requestId, node);
-    out.push({ kind: "node", node: { ...node, children: [] } });
+    out.push({ kind: "node", node: cloneNode(node) });
     return out;
+  }
+
+  mergeRequestExtraHeaders(
+    requestId: string,
+    headers: Record<string, string>,
+  ): AssembledEvent[] {
+    const node = this.byRequestId.get(requestId);
+    if (!node) return [];
+    node.requestHeaders = mergeHeaders(node.requestHeaders, headers);
+    node.updatedAt = Date.now();
+    return [{ kind: "node", node: cloneNode(node) }];
+  }
+
+  mergeResponseExtraHeaders(
+    requestId: string,
+    headers: Record<string, string>,
+  ): AssembledEvent[] {
+    const node = this.byRequestId.get(requestId);
+    if (!node) return [];
+    node.responseHeaders = mergeHeaders(node.responseHeaders, headers);
+    node.updatedAt = Date.now();
+    return [{ kind: "node", node: cloneNode(node) }];
+  }
+
+  setRequestBody(requestId: string, body: BodyPayload): AssembledEvent[] {
+    const node = this.byRequestId.get(requestId);
+    if (!node) return [];
+    node.requestBody = body;
+    node.updatedAt = Date.now();
+    return [{ kind: "node", node: cloneNode(node) }];
+  }
+
+  setResponseBody(requestId: string, body: BodyPayload): AssembledEvent[] {
+    const node = this.byRequestId.get(requestId);
+    if (!node) return [];
+    node.responseBody = body;
+    node.bodyPreview = body.text;
+    node.bodyRef = body.truncated
+      ? `truncated:${body.size ?? 0}`
+      : body.text != null
+        ? `inline:${body.size ?? body.text.length}`
+        : body.unavailableReason
+          ? `unavailable:${body.unavailableReason}`
+          : undefined;
+    node.updatedAt = Date.now();
+    return [{ kind: "node", node: cloneNode(node) }];
   }
 
   handleResponseReceived(ev: CdpResponseReceived): AssembledEvent[] {
@@ -141,7 +216,10 @@ export class RrAssembler {
     const now = Date.now();
     node.status = ev.response.status;
     node.statusText = ev.response.statusText;
-    node.responseHeaders = headersOf(ev.response.headers);
+    node.responseHeaders = mergeHeaders(
+      node.responseHeaders,
+      headersOf(ev.response.headers),
+    );
     node.mimeType = ev.response.mimeType;
     node.timing = ev.response.timing;
     if (ev.type) node.resourceType = ev.type;
@@ -178,6 +256,8 @@ function cloneNode(n: RrNode): RrNode {
     children: [...n.children],
     requestHeaders: { ...n.requestHeaders },
     responseHeaders: { ...n.responseHeaders },
+    requestBody: n.requestBody ? { ...n.requestBody } : undefined,
+    responseBody: n.responseBody ? { ...n.responseBody } : undefined,
     initiator: n.initiator ? { ...n.initiator } : undefined,
   };
 }
@@ -186,3 +266,5 @@ function cloneNode(n: RrNode): RrNode {
 export function resetAssemblerSeq(): void {
   seq = 0;
 }
+
+export { requestBodyFromPostData };

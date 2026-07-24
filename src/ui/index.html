@@ -369,6 +369,11 @@
           el.detail.innerHTML = `<p class="meta">Select a node</p>`;
           return;
         }
+        const reqBody = formatBody(node.requestBody);
+        const resBody = formatBody(node.responseBody) ||
+          (node.bodyPreview
+            ? escapeHtml(node.bodyPreview.slice(0, 16000))
+            : `<span class="meta">—</span>`);
         el.detail.innerHTML = `
           <dl>
             <dt>URL</dt><dd>${escapeHtml(node.url)}</dd>
@@ -377,21 +382,41 @@
             <dt>Status</dt><dd>${node.status ?? "—"} ${escapeHtml(node.statusText || "")}</dd>
             <dt>Edge</dt><dd>${escapeHtml(node.edgeType || "root")}</dd>
             <dt>Initiator</dt><dd>${escapeHtml(node.initiator?.type || "—")}</dd>
-            <dt>Frame</dt><dd>${escapeHtml(node.frameId || "—")}</dd>
-            <dt>Loader</dt><dd>${escapeHtml(node.loaderId || "—")}</dd>
+            <dt>MIME</dt><dd>${escapeHtml(node.mimeType || "—")}</dd>
             <dt>Request ID</dt><dd>${escapeHtml(node.requestId)}</dd>
           </dl>
           <h2>Request headers</h2>
           <pre>${escapeHtml(JSON.stringify(node.requestHeaders || {}, null, 2))}</pre>
+          <h2>Request body</h2>
+          <pre>${reqBody}</pre>
           <h2>Response headers</h2>
           <pre>${escapeHtml(JSON.stringify(node.responseHeaders || {}, null, 2))}</pre>
-          ${
-            node.bodyPreview
-              ? `<h2>Body preview</h2><pre>${escapeHtml(node.bodyPreview.slice(0, 8000))}</pre>`
-              : ""
-          }
+          <h2>Response body</h2>
+          <pre>${resBody}</pre>
           ${node.errorText ? `<h2>Error</h2><pre>${escapeHtml(node.errorText)}</pre>` : ""}
         `;
+      }
+
+      function formatBody(body) {
+        if (!body) return `<span class="meta">— (none)</span>`;
+        if (body.unavailableReason) {
+          return `<span class="meta">— (${escapeHtml(body.unavailableReason)})</span>`;
+        }
+        const note = body.truncated
+          ? `\n… truncated (original ${body.size ?? "?"} bytes)`
+          : "";
+        if (body.text != null) {
+          return escapeHtml(body.text.slice(0, 16000) + note);
+        }
+        if (body.base64) {
+          return escapeHtml(
+            `[base64 ${body.size ?? "?"} bytes]` +
+              (body.truncated ? " truncated" : "") +
+              "\n" +
+              body.base64.slice(0, 2000),
+          );
+        }
+        return `<span class="meta">—</span>`;
       }
 
       function shortUrl(u) {

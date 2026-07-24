@@ -60,6 +60,15 @@ export function createApp(opts: ApiOptions): Express {
     res.json({ nodes: opts.store.getAllNodes() });
   });
 
+  app.get("/nodes/:id", (req, res) => {
+    const node = opts.store.getAllNodes().find((n) => n.id === req.params.id);
+    if (!node) {
+      res.status(404).json({ error: "node not found" });
+      return;
+    }
+    res.json({ node });
+  });
+
   app.post("/attach", async (req, res) => {
     const targetId = req.body?.targetId as string | undefined;
     if (!targetId) {

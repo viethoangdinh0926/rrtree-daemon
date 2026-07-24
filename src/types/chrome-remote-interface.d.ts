@@ -17,8 +17,13 @@ declare module "chrome-remote-interface" {
       getResponseBody: (opts: {
         requestId: string;
       }) => Promise<{ body: string; base64Encoded: boolean }>;
+      getRequestPostData: (opts: {
+        requestId: string;
+      }) => Promise<{ postData: string }>;
       requestWillBeSent: (cb: (params: unknown) => void) => void;
+      requestWillBeSentExtraInfo: (cb: (params: unknown) => void) => void;
       responseReceived: (cb: (params: unknown) => void) => void;
+      responseReceivedExtraInfo: (cb: (params: unknown) => void) => void;
       loadingFinished: (cb: (params: unknown) => void) => void;
       loadingFailed: (cb: (params: unknown) => void) => void;
     };

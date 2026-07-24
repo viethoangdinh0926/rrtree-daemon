@@ -38,6 +38,21 @@ export interface InitiatorInfo {
   stack?: unknown;
 }
 
+export interface BodyPayload {
+  /** Decoded text when available; omitted for binary or unavailable bodies. */
+  text?: string;
+  /** True when original bytes were base64 (binary / non-UTF8). */
+  base64Encoded?: boolean;
+  /** Raw base64 when text decode is inappropriate (truncated). */
+  base64?: string;
+  /** Byte length before truncation. */
+  size?: number;
+  /** True when stored content was truncated to the capture cap. */
+  truncated?: boolean;
+  /** Why body is missing when neither text nor base64 is set. */
+  unavailableReason?: string;
+}
+
 export interface RrNode {
   id: string;
   requestId: string;
@@ -51,12 +66,18 @@ export interface RrNode {
   mimeType?: string;
   requestHeaders: Record<string, string>;
   responseHeaders: Record<string, string>;
+  /** POST/PUT body from CDP (postData / getRequestPostData). */
+  requestBody?: BodyPayload;
+  /** Response body when capturable (getResponseBody). */
+  responseBody?: BodyPayload;
+  /** @deprecated Prefer responseBody.text */
+  bodyRef?: string;
+  /** @deprecated Prefer responseBody.text */
+  bodyPreview?: string;
   timing?: Record<string, number>;
   frameId?: string;
   loaderId?: string;
   targetId?: string;
-  bodyRef?: string;
-  bodyPreview?: string;
   parentId?: string;
   edgeType?: EdgeType;
   initiator?: InitiatorInfo;
@@ -105,6 +126,8 @@ export interface CdpRequestWillBeSent {
     url: string;
     method: string;
     headers: Record<string, string>;
+    postData?: string;
+    hasPostData?: boolean;
   };
   timestamp: number;
   wallTime?: number;

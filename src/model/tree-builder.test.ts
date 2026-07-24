@@ -177,6 +177,30 @@ describe("user_interaction", () => {
   });
 });
 
+describe("RrAssembler request body", () => {
+  it("captures postData on requestWillBeSent", () => {
+    resetAssemblerSeq();
+    const assembler = new RrAssembler();
+    const events = assembler.handleRequestWillBeSent({
+      requestId: "post-1",
+      request: {
+        url: "https://example.com/api",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        postData: '{"a":1}',
+        hasPostData: true,
+      },
+      timestamp: 1,
+      initiator: { type: "script" },
+      type: "Fetch",
+    });
+    expect(events[0]!.node.requestBody?.text).toBe('{"a":1}');
+    expect(events[0]!.node.requestHeaders["Content-Type"]).toBe(
+      "application/json",
+    );
+  });
+});
+
 describe("RrAssembler redirect hop", () => {
   it("emits finished intermediate node then new hop", () => {
     resetAssemblerSeq();

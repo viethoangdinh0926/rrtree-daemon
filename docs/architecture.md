@@ -31,4 +31,10 @@ On attach, the daemon injects listeners that `console.debug('__rrtree_gesture__'
 
 ## Body capture
 
-After `loadingFinished`, for Document / XHR / Fetch, optionally call `Network.getResponseBody` and store up to 256KB as `bodyPreview`.
+After `loadingFinished`:
+
+- **Request body** — from `request.postData` on `requestWillBeSent`, or `Network.getRequestPostData` for POST/PUT/PATCH when needed.
+- **Response body** — `Network.getResponseBody` for text-like types (Document, XHR, Fetch, Script, Stylesheet, …), capped at 256KB.
+- **Headers** — from `requestWillBeSent` / `responseReceived`, merged with `*ExtraInfo` events when Chrome emits them (often includes cookie-related headers).
+
+Binary types (Image, Media, Font) skip response body capture and record `unavailableReason: skipped_binary_or_unsupported_type`.
