@@ -203,10 +203,14 @@ If `attachedTargets` is empty, Chrome is not reachable at `CDP_HOST`/`CDP_PORT`,
 | `GET` | `/health` | Attachment + tree counts |
 | `GET` | `/trees` | List trees |
 | `GET` | `/trees/:id` | One tree + all nodes (includes headers/bodies) |
+| `DELETE` | `/trees/:id` | Delete one tree and its nodes |
+| `DELETE` | `/trees` | Delete all trees |
 | `GET` | `/nodes` | All nodes |
 | `GET` | `/nodes/:id` | Single node with full request/response detail |
-| `GET` | `/events` | SSE stream of `{ op, treeId, node }` patches |
+| `GET` | `/events` | SSE stream of `{ op, treeId?, node? }` patches (`upsert` / `attach` / `delete` / `clear`) |
 | `POST` | `/attach` | `{ "targetId": "…" }` force-attach a page |
+
+In the UI: use **×** on a tree row, **Delete selected**, or **Clear all**.
 
 ### Node payload (headers & bodies)
 

@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, beforeEach } from "vitest";
 import { RrAssembler, resetAssemblerSeq } from "./rr-assembler.js";
 import {
+  clearTrees,
   createTreeState,
+  deleteTree,
   integrateNode,
   recordGesture,
   resetTreeSeq,
@@ -198,6 +200,45 @@ describe("RrAssembler request body", () => {
     expect(events[0]!.node.requestHeaders["Content-Type"]).toBe(
       "application/json",
     );
+  });
+});
+
+describe("deleteTree / clearTrees", () => {
+  it("removes one tree and clearTrees empties the forest", () => {
+    resetAssemblerSeq();
+    resetTreeSeq();
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "d1",
+      loaderId: "L1",
+      frameId: "F1",
+      request: { url: "https://example.com/one", method: "GET", headers: {} },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "d2",
+      loaderId: "L2",
+      frameId: "F2",
+      request: { url: "https://example.com/two", method: "GET", headers: {} },
+      timestamp: 2,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    expect(state.trees.size).toBe(2);
+    const [firstId, secondId] = [...state.trees.keys()];
+    expect(deleteTree(state, firstId!)).toBe(true);
+    expect(state.trees.has(firstId!)).toBe(false);
+    expect(state.trees.has(secondId!)).toBe(true);
+    expect(clearTrees(state)).toBe(1);
+    expect(state.trees.size).toBe(0);
+    expect(state.nodes.size).toBe(0);
   });
 });
 

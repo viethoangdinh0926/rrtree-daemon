@@ -101,12 +101,12 @@ export interface Tree {
   updatedAt: number;
 }
 
-export type PatchOp = "upsert" | "attach";
+export type PatchOp = "upsert" | "attach" | "delete" | "clear";
 
 export interface TreePatch {
   op: PatchOp;
-  treeId: string;
-  node: RrNode;
+  treeId?: string;
+  node?: RrNode;
   ts: number;
 }
 

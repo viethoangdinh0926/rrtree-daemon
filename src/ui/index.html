@@ -107,6 +107,63 @@
         border-color: var(--accent);
         background: color-mix(in srgb, var(--accent) 15%, transparent);
       }
+      .toolbar {
+        display: flex;
+        gap: 0.4rem;
+        margin-bottom: 0.75rem;
+        flex-wrap: wrap;
+      }
+      .toolbar button {
+        flex: 1;
+        min-width: 0;
+        font: inherit;
+        font-size: 0.75rem;
+        padding: 0.4rem 0.5rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        cursor: pointer;
+      }
+      .toolbar button:hover:not(:disabled) {
+        border-color: var(--accent);
+      }
+      .toolbar button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .toolbar button.danger:hover:not(:disabled) {
+        border-color: #e06c75;
+        color: #ffb4b4;
+      }
+      .tree-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.25rem;
+        align-items: stretch;
+        margin-bottom: 0.25rem;
+      }
+      .tree-row .pick {
+        margin-bottom: 0;
+      }
+      .tree-row .del {
+        width: 2rem;
+        padding: 0;
+        margin: 0;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font: inherit;
+        font-size: 1rem;
+        line-height: 1;
+      }
+      .tree-row .del:hover {
+        color: #ffb4b4;
+        border-color: var(--border);
+        background: var(--panel);
+      }
       .node.selected {
         border-color: var(--accent);
         background: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -196,6 +253,14 @@
     <main>
       <aside>
         <h2>Trees</h2>
+        <div class="toolbar">
+          <button type="button" id="btn-delete-selected" class="danger" disabled>
+            Delete selected
+          </button>
+          <button type="button" id="btn-clear-all" class="danger">
+            Clear all
+          </button>
+        </div>
         <div id="tree-list" class="tree-list"></div>
       </aside>
       <section>
@@ -221,23 +286,46 @@
         treeList: document.getElementById("tree-list"),
         treeView: document.getElementById("tree-view"),
         detail: document.getElementById("detail"),
+        btnDeleteSelected: document.getElementById("btn-delete-selected"),
+        btnClearAll: document.getElementById("btn-clear-all"),
       };
 
       async function refreshTrees() {
         const res = await fetch("/trees");
         const data = await res.json();
         state.trees = data.trees || [];
+        // Drop cached nodes for trees that no longer exist.
+        for (const id of [...state.nodesByTree.keys()]) {
+          if (!state.trees.find((t) => t.id === id)) state.nodesByTree.delete(id);
+        }
+        if (
+          state.selectedTreeId &&
+          !state.trees.find((t) => t.id === state.selectedTreeId)
+        ) {
+          state.selectedTreeId = null;
+          state.selectedNodeId = null;
+          renderDetail(null);
+        }
         renderTreeList();
         if (!state.selectedTreeId && state.trees.length) {
           await selectTree(state.trees[state.trees.length - 1].id);
         } else if (state.selectedTreeId) {
           await loadTree(state.selectedTreeId);
+        } else {
+          renderTree();
         }
       }
 
       async function loadTree(id) {
         const res = await fetch(`/trees/${encodeURIComponent(id)}`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (res.status === 404) {
+            removeTreeLocal(id);
+            renderTreeList();
+            renderTree();
+          }
+          return;
+        }
         const data = await res.json();
         const map = new Map();
         for (const n of data.nodes || []) map.set(n.id, n);
@@ -253,8 +341,56 @@
         renderDetail(null);
       }
 
+      function removeTreeLocal(treeId) {
+        state.trees = state.trees.filter((t) => t.id !== treeId);
+        state.nodesByTree.delete(treeId);
+        if (state.selectedTreeId === treeId) {
+          state.selectedTreeId = null;
+          state.selectedNodeId = null;
+          renderDetail(null);
+        }
+      }
+
+      async function deleteTree(treeId) {
+        if (!treeId) return;
+        const res = await fetch(`/trees/${encodeURIComponent(treeId)}`, {
+          method: "DELETE",
+        });
+        if (!res.ok && res.status !== 404) {
+          el.status.textContent = "delete failed";
+          return;
+        }
+        removeTreeLocal(treeId);
+        renderTreeList();
+        if (!state.selectedTreeId && state.trees.length) {
+          await selectTree(state.trees[0].id);
+        } else {
+          renderTree();
+        }
+        el.status.textContent = `live · ${state.trees.length} trees`;
+      }
+
+      async function clearAllTrees() {
+        if (!state.trees.length) return;
+        if (!confirm(`Delete all ${state.trees.length} trees?`)) return;
+        const res = await fetch("/trees", { method: "DELETE" });
+        if (!res.ok) {
+          el.status.textContent = "clear failed";
+          return;
+        }
+        state.trees = [];
+        state.nodesByTree.clear();
+        state.selectedTreeId = null;
+        state.selectedNodeId = null;
+        renderTreeList();
+        renderTree();
+        renderDetail(null);
+        el.status.textContent = "live · 0 trees";
+      }
+
       function upsertNode(patch) {
         const { treeId, node } = patch;
+        if (!treeId || !node) return;
         if (!state.nodesByTree.has(treeId)) state.nodesByTree.set(treeId, new Map());
         state.nodesByTree.get(treeId).set(node.id, node);
         if (!state.trees.find((t) => t.id === treeId)) {
@@ -288,12 +424,22 @@
             const label = root?.url || t.id;
             const short = label.length > 48 ? label.slice(0, 45) + "…" : label;
             const active = t.id === state.selectedTreeId ? "active" : "";
-            return `<button class="${active}" data-id="${t.id}" title="${escapeAttr(label)}">${escapeHtml(short)}<div class="meta">${nodes?.size || "?"} nodes</div></button>`;
+            return `<div class="tree-row">
+              <button type="button" class="pick ${active}" data-id="${t.id}" title="${escapeAttr(label)}">${escapeHtml(short)}<div class="meta">${nodes?.size || "?"} nodes</div></button>
+              <button type="button" class="del" data-id="${t.id}" title="Delete tree" aria-label="Delete tree">×</button>
+            </div>`;
           })
           .join("");
-        el.treeList.querySelectorAll("button").forEach((btn) => {
+        el.treeList.querySelectorAll("button.pick").forEach((btn) => {
           btn.addEventListener("click", () => selectTree(btn.dataset.id));
         });
+        el.treeList.querySelectorAll("button.del").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            void deleteTree(btn.dataset.id);
+          });
+        });
+        el.btnDeleteSelected.disabled = !state.selectedTreeId;
       }
 
       function renderTree() {
@@ -450,6 +596,13 @@
           el.status.classList.remove("ok");
         }
 
+        el.btnDeleteSelected.addEventListener("click", () => {
+          if (state.selectedTreeId) void deleteTree(state.selectedTreeId);
+        });
+        el.btnClearAll.addEventListener("click", () => {
+          void clearAllTrees();
+        });
+
         const es = new EventSource("/events");
         es.onmessage = (msg) => {
           try {
@@ -462,6 +615,28 @@
             if (data.op === "upsert" || data.op === "attach") {
               upsertNode(data);
               el.status.textContent = `live · ${state.trees.length} trees`;
+              return;
+            }
+            if (data.op === "delete" && data.treeId) {
+              removeTreeLocal(data.treeId);
+              renderTreeList();
+              if (!state.selectedTreeId && state.trees.length) {
+                void selectTree(state.trees[0].id);
+              } else {
+                renderTree();
+              }
+              el.status.textContent = `live · ${state.trees.length} trees`;
+              return;
+            }
+            if (data.op === "clear") {
+              state.trees = [];
+              state.nodesByTree.clear();
+              state.selectedTreeId = null;
+              state.selectedNodeId = null;
+              renderTreeList();
+              renderTree();
+              renderDetail(null);
+              el.status.textContent = "live · 0 trees";
             }
           } catch {
             /* ignore */

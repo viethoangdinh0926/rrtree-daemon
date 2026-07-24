@@ -1,6 +1,8 @@
 import { EventEmitter } from "node:events";
 import {
+  clearTrees,
   createTreeState,
+  deleteTree,
   getTreeSnapshot,
   integrateNode,
   listTrees,
@@ -35,5 +37,25 @@ export class TreeStore extends EventEmitter {
 
   getAllNodes(): RrNode[] {
     return [...this.state.nodes.values()];
+  }
+
+  deleteTree(treeId: string): boolean {
+    const ok = deleteTree(this.state, treeId);
+    if (ok) {
+      const patch: TreePatch = {
+        op: "delete",
+        treeId,
+        ts: Date.now(),
+      };
+      this.emit("patch", patch);
+    }
+    return ok;
+  }
+
+  clearTrees(): number {
+    const count = clearTrees(this.state);
+    const patch: TreePatch = { op: "clear", ts: Date.now() };
+    this.emit("patch", patch);
+    return count;
   }
 }

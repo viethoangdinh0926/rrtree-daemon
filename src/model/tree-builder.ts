@@ -348,6 +348,54 @@ export function listTrees(state: TreeState) {
   return [...state.trees.values()].map((t) => ({ ...t }));
 }
 
+/** Remove one tree and all of its nodes; returns false if unknown. */
+export function deleteTree(state: TreeState, treeId: string): boolean {
+  if (!state.trees.has(treeId)) return false;
+
+  const nodeIds: string[] = [];
+  for (const [id, n] of state.nodes) {
+    if (n.treeId === treeId) nodeIds.push(id);
+  }
+
+  const requestIds: string[] = [];
+  for (const id of nodeIds) {
+    const n = state.nodes.get(id)!;
+    requestIds.push(n.requestId);
+    if (n.loaderId && state.loaderToDocument.get(n.loaderId) === id) {
+      state.loaderToDocument.delete(n.loaderId);
+    }
+    if (n.frameId && state.frameToDocument.get(n.frameId) === id) {
+      state.frameToDocument.delete(n.frameId);
+    }
+    state.nodes.delete(id);
+  }
+
+  for (const [reqId, nodeId] of [...state.requestIdToNodeId.entries()]) {
+    if (nodeIds.includes(nodeId)) state.requestIdToNodeId.delete(reqId);
+  }
+
+  for (const [targetId, activeTreeId] of [
+    ...state.targetToActiveTree.entries(),
+  ]) {
+    if (activeTreeId === treeId) state.targetToActiveTree.delete(targetId);
+  }
+
+  state.trees.delete(treeId);
+  return true;
+}
+
+/** Remove every tree and reset indexes (keeps recentGestures). */
+export function clearTrees(state: TreeState): number {
+  const count = state.trees.size;
+  state.nodes.clear();
+  state.trees.clear();
+  state.requestIdToNodeId.clear();
+  state.loaderToDocument.clear();
+  state.frameToDocument.clear();
+  state.targetToActiveTree.clear();
+  return count;
+}
+
 export function resetTreeSeq(): void {
   treeSeq = 0;
 }

@@ -56,6 +56,20 @@ export function createApp(opts: ApiOptions): Express {
     res.json(snap);
   });
 
+  app.delete("/trees/:id", (req, res) => {
+    const ok = opts.store.deleteTree(req.params.id);
+    if (!ok) {
+      res.status(404).json({ error: "tree not found" });
+      return;
+    }
+    res.json({ ok: true, treeId: req.params.id });
+  });
+
+  app.delete("/trees", (_req, res) => {
+    const deleted = opts.store.clearTrees();
+    res.json({ ok: true, deleted });
+  });
+
   app.get("/nodes", (_req, res) => {
     res.json({ nodes: opts.store.getAllNodes() });
   });
@@ -85,7 +99,7 @@ export function createApp(opts: ApiOptions): Express {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
 
-    const send = (patch: TreePatch) => {
+    const send = (patch: TreePatch | { op: string; trees?: unknown }) => {
       res.write(`data: ${JSON.stringify(patch)}\n\n`);
     };
 
