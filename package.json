@@ -1,0 +1,29 @@
+{
+  "name": "rrtree-daemon",
+  "version": "0.1.0",
+  "description": "Linux daemon that builds live Chrome request–response causality trees via CDP",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc && node scripts/copy-ui.mjs",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "validate:fixtures": "vitest run src/model/tree-builder.test.ts",
+    "validate:live": "tsx scripts/validate-live.ts"
+  },
+  "keywords": ["chrome", "cdp", "network", "daemon"],
+  "license": "MIT",
+  "dependencies": {
+    "chrome-remote-interface": "^0.33.3",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.21",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.4"
+  }
+}

@@ -1,0 +1,134 @@
+[
+  {
+    "event": "requestWillBeSent",
+    "params": {
+      "requestId": "doc-1",
+      "loaderId": "L1",
+      "frameId": "F1",
+      "request": {
+        "url": "https://example.com/",
+        "method": "GET",
+        "headers": {}
+      },
+      "timestamp": 1,
+      "initiator": { "type": "other" },
+      "type": "Document"
+    }
+  },
+  {
+    "event": "responseReceived",
+    "params": {
+      "requestId": "doc-1",
+      "loaderId": "L1",
+      "frameId": "F1",
+      "timestamp": 2,
+      "type": "Document",
+      "response": {
+        "url": "https://example.com/",
+        "status": 200,
+        "statusText": "OK",
+        "headers": { "Content-Type": "text/html" },
+        "mimeType": "text/html"
+      }
+    }
+  },
+  {
+    "event": "loadingFinished",
+    "params": { "requestId": "doc-1", "timestamp": 3 }
+  },
+  {
+    "event": "requestWillBeSent",
+    "params": {
+      "requestId": "css-1",
+      "loaderId": "L1",
+      "frameId": "F1",
+      "request": {
+        "url": "https://example.com/app.css",
+        "method": "GET",
+        "headers": {}
+      },
+      "timestamp": 4,
+      "initiator": { "type": "parser", "url": "https://example.com/" },
+      "type": "Stylesheet"
+    }
+  },
+  {
+    "event": "requestWillBeSent",
+    "params": {
+      "requestId": "js-1",
+      "loaderId": "L1",
+      "frameId": "F1",
+      "request": {
+        "url": "https://example.com/app.js",
+        "method": "GET",
+        "headers": {}
+      },
+      "timestamp": 5,
+      "initiator": { "type": "parser", "url": "https://example.com/" },
+      "type": "Script"
+    }
+  },
+  {
+    "event": "responseReceived",
+    "params": {
+      "requestId": "js-1",
+      "loaderId": "L1",
+      "frameId": "F1",
+      "timestamp": 6,
+      "type": "Script",
+      "response": {
+        "url": "https://example.com/app.js",
+        "status": 200,
+        "statusText": "OK",
+        "headers": {},
+        "mimeType": "application/javascript"
+      }
+    }
+  },
+  {
+    "event": "loadingFinished",
+    "params": { "requestId": "js-1", "timestamp": 7 }
+  },
+  {
+    "event": "requestWillBeSent",
+    "params": {
+      "requestId": "api-1",
+      "loaderId": "L1",
+      "frameId": "F1",
+      "request": {
+        "url": "https://example.com/api/items",
+        "method": "GET",
+        "headers": {}
+      },
+      "timestamp": 8,
+      "initiator": {
+        "type": "script",
+        "url": "https://example.com/app.js",
+        "lineNumber": 10,
+        "requestId": "js-1"
+      },
+      "type": "Fetch"
+    }
+  },
+  {
+    "event": "responseReceived",
+    "params": {
+      "requestId": "api-1",
+      "loaderId": "L1",
+      "frameId": "F1",
+      "timestamp": 9,
+      "type": "Fetch",
+      "response": {
+        "url": "https://example.com/api/items",
+        "status": 200,
+        "statusText": "OK",
+        "headers": { "Content-Type": "application/json" },
+        "mimeType": "application/json"
+      }
+    }
+  },
+  {
+    "event": "loadingFinished",
+    "params": { "requestId": "api-1", "timestamp": 10 }
+  }
+]

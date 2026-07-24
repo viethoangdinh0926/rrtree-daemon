@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rrtree — live request trees</title>
+    <style>
+      :root {
+        --bg: #0f1419;
+        --panel: #1a2332;
+        --border: #2d3a4d;
+        --text: #e7ecf3;
+        --muted: #8b9bb4;
+        --accent: #3d9cf0;
+        --redirect: #e0a106;
+        --parser: #6bcb77;
+        --script: #c792ea;
+        --script_nav: #ff6b9d;
+        --user_interaction: #4fd1c5;
+        --preload: #718096;
+        --other: #a0aec0;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background: radial-gradient(1200px 600px at 10% -10%, #1a2a44, var(--bg));
+        color: var(--text);
+        min-height: 100vh;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        gap: 1rem;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--border);
+        background: color-mix(in srgb, var(--panel) 80%, transparent);
+        backdrop-filter: blur(8px);
+        position: sticky;
+        top: 0;
+        z-index: 2;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.15rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      .status {
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+      .status.ok {
+        color: var(--parser);
+      }
+      main {
+        display: grid;
+        grid-template-columns: 280px 1fr 360px;
+        gap: 0;
+        min-height: calc(100vh - 57px);
+      }
+      @media (max-width: 960px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+      aside,
+      section,
+      article {
+        border-right: 1px solid var(--border);
+        padding: 0.75rem;
+        overflow: auto;
+        max-height: calc(100vh - 57px);
+      }
+      article {
+        border-right: none;
+      }
+      h2 {
+        margin: 0 0 0.75rem;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .tree-list button,
+      .node {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--text);
+        padding: 0.45rem 0.55rem;
+        border-radius: 6px;
+        cursor: pointer;
+        font: inherit;
+        margin-bottom: 0.25rem;
+      }
+      .tree-list button:hover,
+      .node:hover {
+        background: var(--panel);
+        border-color: var(--border);
+      }
+      .tree-list button.active {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 15%, transparent);
+      }
+      .node.selected {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+      }
+      .edge {
+        display: inline-block;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 0.1rem 0.35rem;
+        border-radius: 3px;
+        margin-right: 0.35rem;
+        background: var(--border);
+        color: var(--bg);
+      }
+      .edge.redirect {
+        background: var(--redirect);
+      }
+      .edge.parser {
+        background: var(--parser);
+      }
+      .edge.script {
+        background: var(--script);
+      }
+      .edge.script_nav {
+        background: var(--script_nav);
+      }
+      .edge.user_interaction {
+        background: var(--user_interaction);
+      }
+      .edge.preload {
+        background: var(--preload);
+      }
+      .url {
+        word-break: break-all;
+        font-size: 0.82rem;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 0.72rem;
+        margin-top: 0.15rem;
+      }
+      .children {
+        margin-left: 0.85rem;
+        border-left: 1px dashed var(--border);
+        padding-left: 0.35rem;
+      }
+      .toggle {
+        display: inline-block;
+        width: 1rem;
+        color: var(--muted);
+        user-select: none;
+      }
+      pre {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.75rem;
+        overflow: auto;
+        font-size: 0.75rem;
+        max-height: 50vh;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: 110px 1fr;
+        gap: 0.35rem 0.5rem;
+        font-size: 0.85rem;
+        margin: 0 0 1rem;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>rrtree</h1>
+      <span id="status" class="status">connecting…</span>
+    </header>
+    <main>
+      <aside>
+        <h2>Trees</h2>
+        <div id="tree-list" class="tree-list"></div>
+      </aside>
+      <section>
+        <h2>Request tree</h2>
+        <div id="tree-view"></div>
+      </section>
+      <article>
+        <h2>Selected RR</h2>
+        <div id="detail"><p class="meta">Select a node</p></div>
+      </article>
+    </main>
+    <script>
+      const state = {
+        trees: [],
+        nodesByTree: new Map(),
+        selectedTreeId: null,
+        selectedNodeId: null,
+        collapsed: new Set(),
+      };
+
+      const el = {
+        status: document.getElementById("status"),
+        treeList: document.getElementById("tree-list"),
+        treeView: document.getElementById("tree-view"),
+        detail: document.getElementById("detail"),
+      };
+
+      async function refreshTrees() {
+        const res = await fetch("/trees");
+        const data = await res.json();
+        state.trees = data.trees || [];
+        renderTreeList();
+        if (!state.selectedTreeId && state.trees.length) {
+          await selectTree(state.trees[state.trees.length - 1].id);
+        } else if (state.selectedTreeId) {
+          await loadTree(state.selectedTreeId);
+        }
+      }
+
+      async function loadTree(id) {
+        const res = await fetch(`/trees/${encodeURIComponent(id)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const map = new Map();
+        for (const n of data.nodes || []) map.set(n.id, n);
+        state.nodesByTree.set(id, map);
+        renderTree();
+      }
+
+      async function selectTree(id) {
+        state.selectedTreeId = id;
+        state.selectedNodeId = null;
+        renderTreeList();
+        await loadTree(id);
+        renderDetail(null);
+      }
+
+      function upsertNode(patch) {
+        const { treeId, node } = patch;
+        if (!state.nodesByTree.has(treeId)) state.nodesByTree.set(treeId, new Map());
+        state.nodesByTree.get(treeId).set(node.id, node);
+        if (!state.trees.find((t) => t.id === treeId)) {
+          state.trees.push({
+            id: treeId,
+            rootId: node.parentId ? undefined : node.id,
+            updatedAt: node.updatedAt,
+            createdAt: node.createdAt,
+            targetId: node.targetId,
+          });
+        } else {
+          const t = state.trees.find((t) => t.id === treeId);
+          t.updatedAt = node.updatedAt;
+          if (!node.parentId) t.rootId = node.id;
+        }
+        if (state.selectedTreeId === treeId) {
+          renderTreeList();
+          renderTree();
+          if (state.selectedNodeId === node.id) renderDetail(node);
+        } else {
+          renderTreeList();
+        }
+      }
+
+      function renderTreeList() {
+        const sorted = [...state.trees].sort((a, b) => b.updatedAt - a.updatedAt);
+        el.treeList.innerHTML = sorted
+          .map((t) => {
+            const nodes = state.nodesByTree.get(t.id);
+            const root = nodes?.get(t.rootId);
+            const label = root?.url || t.id;
+            const short = label.length > 48 ? label.slice(0, 45) + "…" : label;
+            const active = t.id === state.selectedTreeId ? "active" : "";
+            return `<button class="${active}" data-id="${t.id}" title="${escapeAttr(label)}">${escapeHtml(short)}<div class="meta">${nodes?.size || "?"} nodes</div></button>`;
+          })
+          .join("");
+        el.treeList.querySelectorAll("button").forEach((btn) => {
+          btn.addEventListener("click", () => selectTree(btn.dataset.id));
+        });
+      }
+
+      function renderTree() {
+        const id = state.selectedTreeId;
+        if (!id) {
+          el.treeView.innerHTML = `<p class="meta">No tree selected</p>`;
+          return;
+        }
+        const nodes = state.nodesByTree.get(id);
+        const tree = state.trees.find((t) => t.id === id);
+        if (!nodes || !tree) {
+          el.treeView.innerHTML = `<p class="meta">Loading…</p>`;
+          return;
+        }
+        const root = nodes.get(tree.rootId);
+        if (!root) {
+          el.treeView.innerHTML = `<p class="meta">Empty tree</p>`;
+          return;
+        }
+        el.treeView.innerHTML = renderNodeHtml(root, nodes, 0);
+        el.treeView.querySelectorAll(".node").forEach((n) => {
+          n.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const nid = n.dataset.id;
+            state.selectedNodeId = nid;
+            renderTree();
+            renderDetail(nodes.get(nid));
+          });
+        });
+        el.treeView.querySelectorAll(".toggle").forEach((t) => {
+          t.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const nid = t.dataset.id;
+            if (state.collapsed.has(nid)) state.collapsed.delete(nid);
+            else state.collapsed.add(nid);
+            renderTree();
+          });
+        });
+      }
+
+      function renderNodeHtml(node, nodes, depth) {
+        const kids = (node.children || [])
+          .map((cid) => nodes.get(cid))
+          .filter(Boolean);
+        const hasKids = kids.length > 0;
+        const collapsed = state.collapsed.has(node.id);
+        const selected = node.id === state.selectedNodeId ? "selected" : "";
+        const edge = node.edgeType
+          ? `<span class="edge ${node.edgeType}">${node.edgeType}</span>`
+          : depth === 0
+            ? `<span class="edge other">root</span>`
+            : "";
+        const status =
+          node.status != null
+            ? node.status
+            : node.failed
+              ? "ERR"
+              : node.hasResponse
+                ? "…"
+                : "→";
+        let html = `<div class="node ${selected}" data-id="${node.id}">
+          <div>${hasKids ? `<span class="toggle" data-id="${node.id}">${collapsed ? "▶" : "▼"}</span>` : `<span class="toggle"> </span>`}${edge}<span class="url">${escapeHtml(node.method)} ${escapeHtml(shortUrl(node.url))}</span></div>
+          <div class="meta">${escapeHtml(String(node.resourceType))} · ${status}${node.mimeType ? " · " + escapeHtml(node.mimeType) : ""}</div>
+        </div>`;
+        if (hasKids && !collapsed) {
+          html += `<div class="children">${kids.map((k) => renderNodeHtml(k, nodes, depth + 1)).join("")}</div>`;
+        }
+        return html;
+      }
+
+      function renderDetail(node) {
+        if (!node) {
+          el.detail.innerHTML = `<p class="meta">Select a node</p>`;
+          return;
+        }
+        el.detail.innerHTML = `
+          <dl>
+            <dt>URL</dt><dd>${escapeHtml(node.url)}</dd>
+            <dt>Method</dt><dd>${escapeHtml(node.method)}</dd>
+            <dt>Type</dt><dd>${escapeHtml(node.resourceType)}</dd>
+            <dt>Status</dt><dd>${node.status ?? "—"} ${escapeHtml(node.statusText || "")}</dd>
+            <dt>Edge</dt><dd>${escapeHtml(node.edgeType || "root")}</dd>
+            <dt>Initiator</dt><dd>${escapeHtml(node.initiator?.type || "—")}</dd>
+            <dt>Frame</dt><dd>${escapeHtml(node.frameId || "—")}</dd>
+            <dt>Loader</dt><dd>${escapeHtml(node.loaderId || "—")}</dd>
+            <dt>Request ID</dt><dd>${escapeHtml(node.requestId)}</dd>
+          </dl>
+          <h2>Request headers</h2>
+          <pre>${escapeHtml(JSON.stringify(node.requestHeaders || {}, null, 2))}</pre>
+          <h2>Response headers</h2>
+          <pre>${escapeHtml(JSON.stringify(node.responseHeaders || {}, null, 2))}</pre>
+          ${
+            node.bodyPreview
+              ? `<h2>Body preview</h2><pre>${escapeHtml(node.bodyPreview.slice(0, 8000))}</pre>`
+              : ""
+          }
+          ${node.errorText ? `<h2>Error</h2><pre>${escapeHtml(node.errorText)}</pre>` : ""}
+        `;
+      }
+
+      function shortUrl(u) {
+        try {
+          const x = new URL(u);
+          return x.pathname + x.search || x.href;
+        } catch {
+          return u;
+        }
+      }
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      function escapeAttr(s) {
+        return escapeHtml(s).replace(/'/g, "&#39;");
+      }
+
+      async function connect() {
+        try {
+          const h = await fetch("/health");
+          const health = await h.json();
+          el.status.textContent = `ok · ${health.attachedTargets?.length || 0} targets · ${health.treeCount || 0} trees`;
+          el.status.classList.add("ok");
+          await refreshTrees();
+        } catch (e) {
+          el.status.textContent = "API unreachable";
+          el.status.classList.remove("ok");
+        }
+
+        const es = new EventSource("/events");
+        es.onmessage = (msg) => {
+          try {
+            const data = JSON.parse(msg.data);
+            if (data.op === "snapshot") {
+              state.trees = data.trees || state.trees;
+              renderTreeList();
+              return;
+            }
+            if (data.op === "upsert" || data.op === "attach") {
+              upsertNode(data);
+              el.status.textContent = `live · ${state.trees.length} trees`;
+            }
+          } catch {
+            /* ignore */
+          }
+        };
+        es.onerror = () => {
+          el.status.textContent = "SSE reconnecting…";
+          el.status.classList.remove("ok");
+        };
+      }
+
+      connect();
+    </script>
+  </body>
+</html>

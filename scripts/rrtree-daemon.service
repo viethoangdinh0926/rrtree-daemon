@@ -1,0 +1,16 @@
+[Unit]
+Description=rrtree Chrome request-response tree daemon
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/rrtree-daemon
+Environment=CDP_HOST=127.0.0.1
+Environment=CDP_PORT=9222
+Environment=PORT=7733
+ExecStart=%h/.nvm/versions/node/v22.14.0/bin/node %h/rrtree-daemon/dist/index.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

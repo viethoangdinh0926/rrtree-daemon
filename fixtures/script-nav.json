@@ -1,0 +1,74 @@
+[
+  {
+    "event": "requestWillBeSent",
+    "params": {
+      "requestId": "doc-1",
+      "loaderId": "L1",
+      "frameId": "F1",
+      "request": {
+        "url": "https://example.com/start",
+        "method": "GET",
+        "headers": {}
+      },
+      "timestamp": 1,
+      "initiator": { "type": "other" },
+      "type": "Document"
+    }
+  },
+  {
+    "event": "responseReceived",
+    "params": {
+      "requestId": "doc-1",
+      "loaderId": "L1",
+      "frameId": "F1",
+      "timestamp": 2,
+      "type": "Document",
+      "response": {
+        "url": "https://example.com/start",
+        "status": 200,
+        "headers": {},
+        "mimeType": "text/html"
+      }
+    }
+  },
+  {
+    "event": "loadingFinished",
+    "params": { "requestId": "doc-1", "timestamp": 3 }
+  },
+  {
+    "event": "requestWillBeSent",
+    "params": {
+      "requestId": "doc-2",
+      "loaderId": "L2",
+      "frameId": "F1",
+      "request": {
+        "url": "https://example.com/next",
+        "method": "GET",
+        "headers": {}
+      },
+      "timestamp": 4,
+      "initiator": { "type": "script", "url": "https://example.com/start" },
+      "type": "Document"
+    }
+  },
+  {
+    "event": "responseReceived",
+    "params": {
+      "requestId": "doc-2",
+      "loaderId": "L2",
+      "frameId": "F1",
+      "timestamp": 5,
+      "type": "Document",
+      "response": {
+        "url": "https://example.com/next",
+        "status": 200,
+        "headers": {},
+        "mimeType": "text/html"
+      }
+    }
+  },
+  {
+    "event": "loadingFinished",
+    "params": { "requestId": "doc-2", "timestamp": 6 }
+  }
+]

@@ -1,0 +1,91 @@
+[
+  {
+    "event": "requestWillBeSent",
+    "params": {
+      "requestId": "req-1",
+      "loaderId": "loader-1",
+      "frameId": "frame-1",
+      "documentURL": "https://example.com/a",
+      "request": {
+        "url": "https://example.com/a",
+        "method": "GET",
+        "headers": { "User-Agent": "Test" }
+      },
+      "timestamp": 1,
+      "wallTime": 1000,
+      "initiator": { "type": "other" },
+      "type": "Document"
+    }
+  },
+  {
+    "event": "requestWillBeSent",
+    "params": {
+      "requestId": "req-1",
+      "loaderId": "loader-1",
+      "frameId": "frame-1",
+      "documentURL": "https://example.com/b",
+      "request": {
+        "url": "https://example.com/b",
+        "method": "GET",
+        "headers": { "User-Agent": "Test" }
+      },
+      "timestamp": 2,
+      "wallTime": 1001,
+      "initiator": { "type": "other" },
+      "type": "Document",
+      "redirectResponse": {
+        "url": "https://example.com/a",
+        "status": 302,
+        "statusText": "Found",
+        "headers": { "Location": "https://example.com/b" },
+        "mimeType": "text/plain"
+      }
+    }
+  },
+  {
+    "event": "requestWillBeSent",
+    "params": {
+      "requestId": "req-1",
+      "loaderId": "loader-1",
+      "frameId": "frame-1",
+      "documentURL": "https://example.com/c",
+      "request": {
+        "url": "https://example.com/c",
+        "method": "GET",
+        "headers": { "User-Agent": "Test" }
+      },
+      "timestamp": 3,
+      "wallTime": 1002,
+      "initiator": { "type": "other" },
+      "type": "Document",
+      "redirectResponse": {
+        "url": "https://example.com/b",
+        "status": 301,
+        "statusText": "Moved Permanently",
+        "headers": { "Location": "https://example.com/c" },
+        "mimeType": "text/plain"
+      }
+    }
+  },
+  {
+    "event": "responseReceived",
+    "params": {
+      "requestId": "req-1",
+      "loaderId": "loader-1",
+      "frameId": "frame-1",
+      "timestamp": 4,
+      "type": "Document",
+      "response": {
+        "url": "https://example.com/c",
+        "status": 200,
+        "statusText": "OK",
+        "headers": { "Content-Type": "text/html" },
+        "mimeType": "text/html"
+      }
+    }
+  },
+  {
+    "event": "loadingFinished",
+    "params": { "requestId": "req-1", "timestamp": 5, "encodedDataLength": 100 }
+  }
+]
