@@ -162,17 +162,28 @@ export class CdpManager {
     };
     this.attached.set(info.targetId, attached);
 
+    // Only watch the top frame; iframe copies of this script no-op.
+    // Debounce in-page so one click/Enter does not flood console.debug.
     const gestureHook = `
       (function () {
+        try {
+          if (window.top !== window) return;
+        } catch (e) { return; }
         if (window.__rrtreeGestureHook) return;
         window.__rrtreeGestureHook = true;
+        let lastSent = 0;
         const send = (kind) => {
+          const now = Date.now();
+          if (now - lastSent < 400) return;
+          lastSent = now;
           try {
-            console.debug('__rrtree_gesture__', JSON.stringify({ kind, ts: Date.now() }));
+            console.debug('__rrtree_gesture__', JSON.stringify({ kind, ts: now }));
           } catch (e) {}
         };
         window.addEventListener('click', () => send('click'), true);
-        window.addEventListener('keydown', () => send('keydown'), true);
+        window.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') send('keydown');
+        }, true);
       })();
     `;
 

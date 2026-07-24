@@ -7,6 +7,8 @@ import type {
 } from "./types.js";
 
 const GESTURE_WINDOW_MS = 2000;
+/** Ignore duplicate click/keydown hooks from the same physical action. */
+const GESTURE_DEDUP_MS = 400;
 
 export interface TreeState {
   nodes: Map<string, RrNode>;
@@ -35,6 +37,16 @@ export function createTreeState(): TreeState {
 }
 
 export function recordGesture(state: TreeState, g: UserGesture): void {
+  const last = state.recentGestures[state.recentGestures.length - 1];
+  if (
+    last &&
+    last.kind === g.kind &&
+    last.targetId === g.targetId &&
+    g.ts - last.ts < GESTURE_DEDUP_MS
+  ) {
+    // Same physical interaction reported multiple times (frames / double hook).
+    return;
+  }
   state.recentGestures.push(g);
   const cutoff = g.ts - GESTURE_WINDOW_MS * 2;
   state.recentGestures = state.recentGestures.filter((x) => x.ts >= cutoff);
@@ -54,6 +66,12 @@ function findRecentGesture(
     return g;
   }
   return undefined;
+}
+
+/** One Document navigation consumes the gesture so iframes/follow-ups are not re-tagged. */
+function consumeGesture(state: TreeState, gesture: UserGesture): void {
+  const idx = state.recentGestures.lastIndexOf(gesture);
+  if (idx >= 0) state.recentGestures.splice(idx, 1);
 }
 
 function mapInitiatorToEdge(type: string | undefined): EdgeType {
@@ -92,7 +110,9 @@ function resolveParent(
     const gesture = findRecentGesture(state, node, now);
 
     // Prefer recent user gesture over initiator classification (click on <a>, etc.).
+    // Consume after first Document so one click does not tag every iframe Document.
     if (gesture) {
+      consumeGesture(state, gesture);
       const parentDoc =
         (node.frameId && state.frameToDocument.get(node.frameId)) ||
         findActiveDocumentForTarget(state, node.targetId);

@@ -203,6 +203,82 @@ describe("RrAssembler request body", () => {
   });
 });
 
+describe("gesture consume", () => {
+  it("attributes only the first Document to one gesture", () => {
+    resetAssemblerSeq();
+    resetTreeSeq();
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "home",
+      loaderId: "L0",
+      frameId: "F0",
+      request: { url: "https://example.com/home", method: "GET", headers: {} },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    recordGesture(state, {
+      ts: Date.now(),
+      kind: "click",
+      targetId: "T1",
+    });
+    expect(state.recentGestures.length).toBe(1);
+
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "nav",
+      loaderId: "L1",
+      frameId: "F0",
+      request: { url: "https://example.com/next", method: "GET", headers: {} },
+      timestamp: 2,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    expect(state.recentGestures.length).toBe(0);
+
+    const next = [...state.nodes.values()].find((n) =>
+      n.url.endsWith("/next"),
+    )!;
+    expect(next.edgeType).toBe("user_interaction");
+
+    // Later iframe Document must not also become user_interaction.
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "iframe",
+      loaderId: "L2",
+      frameId: "F-iframe",
+      request: {
+        url: "https://example.com/iframe.html",
+        method: "GET",
+        headers: {},
+      },
+      timestamp: 3,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    const iframe = [...state.nodes.values()].find((n) =>
+      n.url.endsWith("/iframe.html"),
+    )!;
+    expect(iframe.edgeType).not.toBe("user_interaction");
+  });
+
+  it("dedupes bursty identical gestures", () => {
+    const state = createTreeState();
+    const ts = Date.now();
+    recordGesture(state, { ts, kind: "click", targetId: "T1" });
+    recordGesture(state, { ts: ts + 50, kind: "click", targetId: "T1" });
+    recordGesture(state, { ts: ts + 80, kind: "click", targetId: "T1" });
+    expect(state.recentGestures.length).toBe(1);
+  });
+});
+
 describe("deleteTree / clearTrees", () => {
   it("removes one tree and clearTrees empties the forest", () => {
     resetAssemblerSeq();
