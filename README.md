@@ -207,10 +207,11 @@ If `attachedTargets` is empty, Chrome is not reachable at `CDP_HOST`/`CDP_PORT`,
 | `DELETE` | `/trees` | Delete all trees |
 | `GET` | `/nodes` | All nodes |
 | `GET` | `/nodes/:id` | Single node with full request/response detail |
+| `GET` | `/nodes/:id/curl` | Minimal `curl` for the node’s request |
 | `GET` | `/events` | SSE stream of `{ op, treeId?, node? }` patches (`upsert` / `attach` / `delete` / `clear`) |
 | `POST` | `/attach` | `{ "targetId": "…" }` force-attach a page |
 
-In the UI: use **×** on a tree row, **Delete selected**, or **Clear all**.
+In the UI: use **×** on a tree row, **Delete selected**, or **Clear all**. Select a node and use **Copy curl** for a minimal replay command (keeps only crucial headers such as `Authorization`, `Content-Type`, `Cookie`, `Accept`, and common API/CSRF tokens).
 
 ### Node payload (headers & bodies)
 

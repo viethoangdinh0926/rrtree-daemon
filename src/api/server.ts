@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import type { Express } from "express";
 import type { CdpManager } from "../cdp/session.js";
+import { nodeToCurl } from "../model/curl.js";
 import type { TreeStore } from "../model/store.js";
 import type { TreePatch } from "../model/types.js";
 
@@ -81,6 +82,16 @@ export function createApp(opts: ApiOptions): Express {
       return;
     }
     res.json({ node });
+  });
+
+  app.get("/nodes/:id/curl", (req, res) => {
+    const node = opts.store.getAllNodes().find((n) => n.id === req.params.id);
+    if (!node) {
+      res.status(404).json({ error: "node not found" });
+      return;
+    }
+    const curl = nodeToCurl(node);
+    res.json({ curl, nodeId: node.id });
   });
 
   app.post("/attach", async (req, res) => {

@@ -311,57 +311,82 @@ function resolveParent(
     return { newRoot: true, edgeType: mapInitiatorToEdge(initiatorType) };
   }
 
-  // Subresources: prefer initiator.requestId, else loaderId document, else frame document.
-  if (initiatorReqId) {
-    const parentFromInitiator = state.requestIdToNodeId.get(initiatorReqId);
-    if (parentFromInitiator) {
-      return {
-        parentId: parentFromInitiator,
-        edgeType: mapInitiatorToEdge(initiatorType),
-        newRoot: false,
-      };
-    }
-  }
-
-  if (node.loaderId) {
-    const doc = state.loaderToDocument.get(node.loaderId);
-    if (doc) {
-      return {
-        parentId: doc,
-        edgeType: mapInitiatorToEdge(initiatorType),
-        newRoot: false,
-      };
-    }
-  }
-
-  if (node.frameId) {
-    const doc = state.frameToDocument.get(node.frameId);
-    if (doc) {
-      return {
-        parentId: doc,
-        edgeType: mapInitiatorToEdge(initiatorType),
-        newRoot: false,
-      };
-    }
-  }
-
-  // Orphan subresource: attach to active tree root if any, else create dangling under a synthetic root later.
-  const activeTreeId = node.targetId
-    ? state.targetToActiveTree.get(node.targetId)
+  // Subresources belong to a navigation (loaderId), not to the session tree root.
+  // Prefer loader document first so post-click assets attach under the new
+  // user_interaction Document instead of the previous page (same frameId).
+  const edge = mapInitiatorToEdge(initiatorType);
+  const loaderDocId = node.loaderId
+    ? state.loaderToDocument.get(node.loaderId)
     : undefined;
-  if (activeTreeId) {
-    const tree = state.trees.get(activeTreeId);
-    if (tree) {
-      return {
-        parentId: tree.rootId,
-        edgeType: mapInitiatorToEdge(initiatorType),
-        newRoot: false,
-      };
+
+  if (initiatorReqId) {
+    const initiatorNodeId = state.requestIdToNodeId.get(initiatorReqId);
+    if (initiatorNodeId && state.nodes.has(initiatorNodeId)) {
+      const initiatorNode = state.nodes.get(initiatorNodeId)!;
+      // Only trust initiator when it is part of this same navigation load.
+      if (
+        !loaderDocId ||
+        initiatorNodeId === loaderDocId ||
+        initiatorNode.loaderId === node.loaderId ||
+        isUnderNode(state, initiatorNodeId, loaderDocId)
+      ) {
+        return { parentId: initiatorNodeId, edgeType: edge, newRoot: false };
+      }
     }
+  }
+
+  if (loaderDocId) {
+    return { parentId: loaderDocId, edgeType: edge, newRoot: false };
+  }
+
+  // loaderId not indexed yet (rare race): newest Document on this frame.
+  const frameDocId = findLatestDocumentForFrame(
+    state,
+    node.frameId,
+    node.targetId,
+  );
+  if (frameDocId) {
+    return { parentId: frameDocId, edgeType: edge, newRoot: false };
+  }
+
+  const activeDocId = findActiveDocumentForTarget(state, node.targetId);
+  if (activeDocId) {
+    return { parentId: activeDocId, edgeType: edge, newRoot: false };
   }
 
   // Last resort: new tree rooted at this node (unusual for subresources).
-  return { newRoot: true, edgeType: mapInitiatorToEdge(initiatorType) };
+  return { newRoot: true, edgeType: edge };
+}
+
+function isUnderNode(
+  state: TreeState,
+  nodeId: string,
+  ancestorId: string,
+): boolean {
+  let cur: RrNode | undefined = state.nodes.get(nodeId);
+  const seen = new Set<string>();
+  while (cur && !seen.has(cur.id)) {
+    if (cur.id === ancestorId) return true;
+    seen.add(cur.id);
+    cur = cur.parentId ? state.nodes.get(cur.parentId) : undefined;
+  }
+  return false;
+}
+
+/** Newest Document for a frame (main-frame id is reused across navigations). */
+function findLatestDocumentForFrame(
+  state: TreeState,
+  frameId?: string,
+  targetId?: string,
+): string | undefined {
+  if (!frameId) return undefined;
+  let best: RrNode | undefined;
+  for (const n of state.nodes.values()) {
+    if (!isDocument(n) || n.frameId !== frameId) continue;
+    if (targetId && n.targetId && n.targetId !== targetId) continue;
+    if (!best || n.createdAt > best.createdAt) best = n;
+  }
+  return best?.id ?? state.frameToDocument.get(frameId);
 }
 
 function findActiveDocumentForTarget(
@@ -373,11 +398,11 @@ function findActiveDocumentForTarget(
   if (!treeId) return undefined;
   const tree = state.trees.get(treeId);
   if (!tree) return undefined;
-  // Walk for most recently updated Document under this tree.
+  // Most recently created Document in this tree (the latest navigation).
   let best: RrNode | undefined;
   for (const n of state.nodes.values()) {
     if (n.treeId !== treeId || !isDocument(n)) continue;
-    if (!best || n.updatedAt > best.updatedAt) best = n;
+    if (!best || n.createdAt > best.createdAt) best = n;
   }
   return best?.id ?? tree.rootId;
 }

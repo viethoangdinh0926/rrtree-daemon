@@ -117,6 +117,92 @@ describe("script_nav", () => {
 });
 
 describe("user_interaction", () => {
+  it("attaches post-click assets under the new document, not the old root", () => {
+    resetAssemblerSeq();
+    resetTreeSeq();
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "home",
+      loaderId: "L0",
+      frameId: "F1",
+      request: { url: "https://example.com/home", method: "GET", headers: {} },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    recordGesture(state, {
+      ts: Date.now(),
+      kind: "click",
+      targetId: "T1",
+    });
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "next",
+      loaderId: "L1",
+      frameId: "F1", // same main frame as previous page
+      request: { url: "https://example.com/next", method: "GET", headers: {} },
+      timestamp: 2,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "css",
+      loaderId: "L1",
+      frameId: "F1",
+      request: {
+        url: "https://example.com/next.css",
+        method: "GET",
+        headers: {},
+      },
+      timestamp: 3,
+      initiator: { type: "parser", url: "https://example.com/next" },
+      type: "Stylesheet",
+    })) {
+      integrateNode(state, a.node);
+    }
+    // Asset with initiator pointing at the OLD document request must still
+    // follow loaderId to the new page.
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "img",
+      loaderId: "L1",
+      frameId: "F1",
+      request: {
+        url: "https://example.com/pic.png",
+        method: "GET",
+        headers: {},
+      },
+      timestamp: 4,
+      initiator: { type: "parser", requestId: "home" },
+      type: "Image",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    const home = [...state.nodes.values()].find((n) =>
+      n.url.endsWith("/home"),
+    )!;
+    const next = [...state.nodes.values()].find((n) =>
+      n.url.endsWith("/next"),
+    )!;
+    const css = [...state.nodes.values()].find((n) =>
+      n.url.endsWith("/next.css"),
+    )!;
+    const img = [...state.nodes.values()].find((n) =>
+      n.url.endsWith("/pic.png"),
+    )!;
+    expect(next.parentId).toBe(home.id);
+    expect(next.edgeType).toBe("user_interaction");
+    expect(css.parentId).toBe(next.id);
+    expect(img.parentId).toBe(next.id);
+    expect(home.children).not.toContain(css.id);
+    expect(home.children).not.toContain(img.id);
+  });
+
   it("attributes click-driven document as user_interaction child", () => {
     resetAssemblerSeq();
     resetTreeSeq();

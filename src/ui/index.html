@@ -164,6 +164,30 @@
         border-color: var(--border);
         background: var(--panel);
       }
+      .curl-block {
+        position: relative;
+      }
+      .curl-block .copy-row {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 0.35rem;
+      }
+      .curl-block button {
+        font: inherit;
+        font-size: 0.72rem;
+        padding: 0.3rem 0.55rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        cursor: pointer;
+      }
+      .curl-block button:hover {
+        border-color: var(--accent);
+      }
+      .curl-block pre {
+        margin-top: 0;
+      }
       .node.selected {
         border-color: var(--accent);
         background: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -510,6 +534,57 @@
         return html;
       }
 
+      const CRUCIAL_HEADERS = new Set([
+        "authorization",
+        "content-type",
+        "cookie",
+        "accept",
+        "x-api-key",
+        "x-auth-token",
+        "x-csrf-token",
+        "x-xsrf-token",
+        "x-requested-with",
+      ]);
+
+      function shellSingleQuote(value) {
+        return "'" + String(value).replace(/'/g, `'\\''`) + "'";
+      }
+
+      function nodeToCurl(node) {
+        const method = (node.method || "GET").toUpperCase();
+        const parts = ["curl"];
+        if (method !== "GET") parts.push("-X", method);
+
+        const headers = Object.entries(node.requestHeaders || {})
+          .filter(([name, value]) => value && CRUCIAL_HEADERS.has(name.toLowerCase()))
+          .map(([name, value]) => {
+            const lower = name.toLowerCase();
+            const display =
+              lower === "content-type"
+                ? "Content-Type"
+                : lower === "authorization"
+                  ? "Authorization"
+                  : lower === "cookie"
+                    ? "Cookie"
+                    : lower === "accept"
+                      ? "Accept"
+                      : name;
+            return [display, value];
+          })
+          .sort((a, b) => a[0].localeCompare(b[0]));
+
+        for (const [name, value] of headers) {
+          parts.push("-H", shellSingleQuote(`${name}: ${value}`));
+        }
+
+        const bodyText = node.requestBody && node.requestBody.text;
+        if (bodyText && method !== "GET" && method !== "HEAD") {
+          parts.push("--data-binary", shellSingleQuote(bodyText));
+        }
+        parts.push(shellSingleQuote(node.url));
+        return parts.join(" ");
+      }
+
       function renderDetail(node) {
         if (!node) {
           el.detail.innerHTML = `<p class="meta">Select a node</p>`;
@@ -520,6 +595,7 @@
           (node.bodyPreview
             ? escapeHtml(node.bodyPreview.slice(0, 16000))
             : `<span class="meta">—</span>`);
+        const curl = nodeToCurl(node);
         el.detail.innerHTML = `
           <dl>
             <dt>URL</dt><dd>${escapeHtml(node.url)}</dd>
@@ -531,6 +607,13 @@
             <dt>MIME</dt><dd>${escapeHtml(node.mimeType || "—")}</dd>
             <dt>Request ID</dt><dd>${escapeHtml(node.requestId)}</dd>
           </dl>
+          <h2>curl</h2>
+          <div class="curl-block">
+            <div class="copy-row">
+              <button type="button" id="btn-copy-curl">Copy curl</button>
+            </div>
+            <pre id="curl-cmd">${escapeHtml(curl)}</pre>
+          </div>
           <h2>Request headers</h2>
           <pre>${escapeHtml(JSON.stringify(node.requestHeaders || {}, null, 2))}</pre>
           <h2>Request body</h2>
@@ -541,6 +624,20 @@
           <pre>${resBody}</pre>
           ${node.errorText ? `<h2>Error</h2><pre>${escapeHtml(node.errorText)}</pre>` : ""}
         `;
+        const copyBtn = document.getElementById("btn-copy-curl");
+        if (copyBtn) {
+          copyBtn.addEventListener("click", async () => {
+            try {
+              await navigator.clipboard.writeText(curl);
+              copyBtn.textContent = "Copied";
+              setTimeout(() => {
+                copyBtn.textContent = "Copy curl";
+              }, 1200);
+            } catch {
+              copyBtn.textContent = "Copy failed";
+            }
+          });
+        }
       }
 
       function formatBody(body) {
