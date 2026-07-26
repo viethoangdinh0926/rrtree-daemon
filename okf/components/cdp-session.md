@@ -1,7 +1,7 @@
 ---
 type: Component
 title: CdpManager
-description: Attaches to Chrome page targets, enables Network/Page/Runtime, feeds RR events and gestures into the store.
+description: Scans for Chrome CDP, attaches page targets, enables Network/Page/Runtime, feeds RR events and gestures into the store.
 resource: file:///home/viet/rrtree-daemon/src/cdp/session.ts
 tags: [component, cdp]
 generated:
@@ -19,20 +19,24 @@ Class in [`src/cdp/session.ts`](../../src/cdp/session.ts) (CodeGraph: `CdpManage
 
 ## Responsibilities
 
-- Connect to browser CDP (`CDP_HOST`/`CDP_PORT`).
-- Discover/attach `page` targets; poll every 3s.
+- **Scan** for a Chrome debugging endpoint at `CDP_HOST`/`CDP_PORT` (HTTP `/json/version`, default every 2s).
+- **Connect** when Chrome appears; discover/attach `page` targets; poll targets while connected (default 3s).
+- On browser WebSocket **disconnect** or failed target refresh: detach pages, tear down the browser client, and **return to scanning**.
 - Enable `Network`, `Page`, `Runtime`.
 - Inject top-frame gesture hook (`click` / `Enter`).
 - Forward Network events to per-target [`RrAssembler`](./rr-assembler.md).
 - Merge ExtraInfo headers; capture request/response bodies after `loadingFinished`.
 - Ingest assembled nodes into [`TreeStore`](./tree-store.md).
 
+`start()` does **not** require Chrome to already be running. Connection state is exposed via `getStatus()` (`scanning` | `connected`).
+
 ## Key methods
 
 | Method | Role |
 |--------|------|
-| `start` / `stop` | Lifecycle |
-| `attachTarget` | Manual attach via API |
+| `start` / `stop` | Lifecycle (scan loop + optional connect) |
+| `getStatus` | `scanning`/`connected`, host/port, attached targets, last error |
+| `attachTarget` | Manual attach via API (only while connected) |
 | `maybeAttach` | Auto-attach page targets |
 | `captureBodiesForNode` | postData + getResponseBody |
 
@@ -40,3 +44,4 @@ Class in [`src/cdp/session.ts`](../../src/cdp/session.ts) (CodeGraph: `CdpManage
 
 - [Pipeline](../architecture/pipeline.md)
 - [RrAssembler](./rr-assembler.md)
+- [Deploy and connect](../playbooks/deploy-and-connect.md)

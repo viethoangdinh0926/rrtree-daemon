@@ -3,7 +3,10 @@
 ## Pipeline
 
 ```
-Chrome (CDP :9222)
+Chrome (CDP :9222)  ←── may appear/disappear
+    │
+CdpManager           — scan /json/version → connect → attach pages;
+    │                  on Chrome death → teardown → scan again
     │  Network.requestWillBeSent / responseReceived / loadingFinished
     ▼
 RrAssembler          — pairs hops; materializes redirect intermediates
@@ -12,9 +15,9 @@ TreeBuilder          — typed edges; roots vs children; loaderId/frameId indexe
     ▼
 TreeStore            — in-memory forest + EventEmitter patches
     ▼
-HTTP API + SSE       — /trees, /events
+HTTP API + SSE       — /health (cdp.state), /trees, /events
     ▼
-Static UI            — live expandable tree
+Static UI            — live expandable tree; scanning vs connected status
 ```
 
 ## Causality rules

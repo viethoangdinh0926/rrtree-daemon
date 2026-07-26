@@ -51,7 +51,7 @@ Or run the built daemon:
 npm start
 ```
 
-By default the HTTP API + UI listen on **[http://127.0.0.1:7733/](http://127.0.0.1:7733/)** and the daemon expects Chrome CDP on **127.0.0.1:9222**.
+By default the HTTP API + UI listen on **[http://127.0.0.1:7733/](http://127.0.0.1:7733/)**. The daemon **scans** for Chrome CDP on **127.0.0.1:9222**, connects when it appears, and returns to scanning if Chrome exits.
 
 ### Environment variables
 
@@ -164,15 +164,19 @@ You should see JSON including `webSocketDebuggerUrl`. If this fails, Chrome is n
 
 ## Connect the daemon to Chrome
 
-1. **Start Chrome** with `--remote-debugging-port=9222` (see above).
-2. **Start the daemon** (`npm run dev` or `npm start`).
-3. Watch the daemon log for lines like:
+Order does not matter — the daemon keeps scanning until Chrome exposes CDP.
+
+1. **Start the daemon** (`npm run dev` or `npm start`) — UI comes up immediately while CDP is in `scanning`.
+2. **Start Chrome** with `--remote-debugging-port=9222` (see above), or start Chrome first.
+3. Watch the daemon log for:
   ```text
+   [cdp] scanning for Chrome debugging endpoint at 127.0.0.1:9222 …
+   [cdp] connected to Chrome at 127.0.0.1:9222
    [cdp] attached page <targetId> (https://…)
-   [api] listening on http://127.0.0.1:7733
   ```
-4. Open the UI: **[http://127.0.0.1:7733/](http://127.0.0.1:7733/)**
+4. Open the UI: **[http://127.0.0.1:7733/](http://127.0.0.1:7733/)** — status shows `scanning…` then `connected · N targets · M trees`.
 5. Browse normally in the debug Chrome window — trees update live.
+6. If Chrome exits, the daemon logs CDP lost and returns to scanning until a new debug Chrome appears.
 
 Health check:
 
@@ -180,20 +184,25 @@ Health check:
 curl http://127.0.0.1:7733/health
 ```
 
-Expected shape:
+Expected shape while connected:
 
 ```json
-{ "ok": true, "attachedTargets": ["…"], "treeCount": 1 }
+{
+  "ok": true,
+  "cdp": { "state": "connected", "host": "127.0.0.1", "port": 9222 },
+  "attachedTargets": ["…"],
+  "treeCount": 1
+}
 ```
 
-If `attachedTargets` is empty, Chrome is not reachable at `CDP_HOST`/`CDP_PORT`, or there is no open page tab yet.
+While waiting for Chrome, `cdp.state` is `"scanning"` and `attachedTargets` is empty.
 
 ### Typical failure modes
 
 
 | Symptom                                 | Fix                                                                        |
 | --------------------------------------- | -------------------------------------------------------------------------- |
-| `CDP connect failed`                    | Start Chrome with `--remote-debugging-port` first; confirm `/json/version` |
+| UI stuck on `scanning`                  | Start Chrome with `--remote-debugging-port`; confirm `/json/version`       |
 | Chrome opens but daemon does not attach | Open at least one tab; wait a few seconds (target poll)                    |
 | Port already in use                     | Change `PORT` / `CDP_PORT`, or quit the other process                      |
 | “Debugger attached” banner              | Expected while the daemon is connected                                     |

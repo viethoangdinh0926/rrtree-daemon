@@ -8,3 +8,4 @@
 - Documented that `.codegraph/codegraph.db` is gitignored and must be installed/indexed per new dev environment (README + this playbook).
 - Agents must run `codegraph index` after codebase changes in the same session (`AGENTS.md`, Cursor/Devin rules, maintain playbook).
 - Agents must **drift-check** for manual/out-of-band user code changes before consulting OKF/CodeGraph, and sync stale knowledge first (`AGENTS.md`, Cursor/Devin rules, maintain playbook).
+- CDP lifecycle: daemon actively scans `CDP_HOST`:`CDP_PORT` (`/json/version`), connects when Chrome appears, and returns to scanning when the browser process/WebSocket dies (`CdpManager` in `src/cdp/session.ts`; `/health` exposes `cdp.state`).

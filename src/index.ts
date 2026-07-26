@@ -11,21 +11,14 @@ async function main(): Promise<void> {
   const store = new TreeStore();
   const cdp = new CdpManager({ host, port, store, captureBodies });
 
-  console.log(`[rrtree] connecting to Chrome CDP at ${host}:${port} …`);
-  try {
-    await cdp.start();
-  } catch (err) {
-    console.error(
-      `[rrtree] CDP connect failed. Start Chrome with:\n` +
-        `  google-chrome --remote-debugging-port=${port} --user-data-dir=/tmp/rrtree-chrome\n`,
-      err instanceof Error ? err.message : err,
-    );
-    process.exitCode = 1;
-    return;
-  }
-
+  // Start scanning immediately; Chrome need not be running yet.
+  await cdp.start();
   await startServer({ store, cdp, port: apiPort });
   console.log(`[rrtree] UI: http://127.0.0.1:${apiPort}/`);
+  console.log(
+    `[rrtree] waiting for Chrome CDP at ${host}:${port} ` +
+      `(start Chrome with --remote-debugging-port=${port})`,
+  );
 
   const shutdown = async () => {
     console.log("[rrtree] shutting down…");

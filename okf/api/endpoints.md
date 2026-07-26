@@ -13,7 +13,7 @@ generated:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Attachment + tree counts |
+| `GET` | `/health` | `cdp.state` (`scanning`\|`connected`), attached targets, tree count |
 | `GET` | `/trees` | List trees |
 | `GET` | `/trees/:id` | Tree + nodes (headers/bodies) |
 | `DELETE` | `/trees/:id` | Delete one tree |

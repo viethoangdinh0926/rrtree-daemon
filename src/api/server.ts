@@ -37,9 +37,16 @@ export function createApp(opts: ApiOptions): Express {
   app.use(express.static(uiDir));
 
   app.get("/health", (_req, res) => {
+    const cdp = opts.cdp.getStatus();
     res.json({
       ok: true,
-      attachedTargets: opts.cdp.getAttachedTargetIds(),
+      cdp: {
+        state: cdp.state,
+        host: cdp.host,
+        port: cdp.port,
+        lastError: cdp.lastError,
+      },
+      attachedTargets: cdp.attachedTargets,
       treeCount: opts.store.getTrees().length,
     });
   });

@@ -18,11 +18,12 @@ sources:
 # Pipeline
 
 ```
-Chrome (CDP :9222)
+Chrome (CDP :9222)  ←── may appear/disappear
+    │
+CdpManager           — scan /json/version → connect → attach pages
+    │                  on Chrome death: teardown → scan again
     │  Network.requestWillBeSent / responseReceived / loadingFinished|Failed
     │  (+ ExtraInfo header merges, gesture console.debug)
-    ▼
-CdpManager           — attach page targets, enable domains, capture bodies
     ▼
 RrAssembler          — pair hops; materialize redirect intermediates
     ▼
@@ -30,14 +31,14 @@ integrateNode        — typed edges; root dedupe; loaderId/frame indexes
     ▼
 TreeStore            — in-memory forest + EventEmitter patches
     ▼
-HTTP API + SSE       — /trees, /events, /nodes/:id/curl
+HTTP API + SSE       — /health (cdp.state), /trees, /events, /nodes/:id/curl
     ▼
-Static UI            — live expandable tree + detail + curl copy
+Static UI            — live tree; status shows scanning vs connected
 ```
 
 ## Process wiring
 
-[`src/index.ts`](../../src/index.ts) constructs `TreeStore` + `CdpManager`, calls `cdp.start()`, then `startServer({ store, cdp })`.
+[`src/index.ts`](../../src/index.ts) constructs `TreeStore` + `CdpManager`, calls `cdp.start()` (begins scanning; does not exit if Chrome is absent), then `startServer({ store, cdp })`.
 
 ## Related components
 

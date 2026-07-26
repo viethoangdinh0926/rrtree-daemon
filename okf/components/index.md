@@ -1,6 +1,6 @@
 # Components
 
-* [CdpManager](cdp-session.md) - Attach page targets; Network/Page/Runtime; gestures and bodies
+* [CdpManager](cdp-session.md) - Scan/connect/reconnect CDP; attach pages; gestures and bodies
 * [RrAssembler](rr-assembler.md) - Pair CDP hops; materialize redirect intermediates
 * [Tree builder](tree-builder.md) - integrateNode, root dedupe, navigation-aware parenting
 * [TreeStore](tree-store.md) - EventEmitter façade for ingest, query, delete

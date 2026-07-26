@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import CDP from "chrome-remote-interface";
 import type { Client } from "chrome-remote-interface";
 import { shouldCaptureResponseBody, truncateBody } from "../model/bodies.js";
@@ -10,11 +11,25 @@ import type {
   CdpResponseReceived,
 } from "../model/types.js";
 
+export type CdpConnectionState = "scanning" | "connected";
+
+export interface CdpStatus {
+  state: CdpConnectionState;
+  host: string;
+  port: number;
+  attachedTargets: string[];
+  lastError?: string;
+}
+
 export interface CdpManagerOptions {
   host?: string;
   port?: number;
   store: TreeStore;
   captureBodies?: boolean;
+  /** How often to probe for a Chrome CDP endpoint while scanning. */
+  scanIntervalMs?: number;
+  /** How often to refresh page targets while connected. */
+  targetPollIntervalMs?: number;
 }
 
 interface AttachedTarget {
@@ -42,100 +57,251 @@ function headersFromExtra(
   return { ...headers };
 }
 
+/** CRI Client is an EventEmitter at runtime (`disconnect` on WS close). */
+function asEmitter(client: Client): EventEmitter {
+  return client as unknown as EventEmitter;
+}
+
 export class CdpManager {
   private readonly host: string;
   private readonly port: number;
   private readonly store: TreeStore;
   private readonly captureBodies: boolean;
+  private readonly scanIntervalMs: number;
+  private readonly targetPollIntervalMs: number;
   private browserClient: Client | null = null;
   private attached = new Map<string, AttachedTarget>();
   private running = false;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private state: CdpConnectionState = "scanning";
+  private lastError: string | undefined;
+  private scanTimer: ReturnType<typeof setInterval> | null = null;
+  private targetPollTimer: ReturnType<typeof setInterval> | null = null;
+  private connecting = false;
+  private connectGeneration = 0;
+  private handlingDisconnect = false;
 
   constructor(opts: CdpManagerOptions) {
     this.host = opts.host ?? "127.0.0.1";
     this.port = opts.port ?? 9222;
     this.store = opts.store;
     this.captureBodies = opts.captureBodies ?? true;
+    this.scanIntervalMs = opts.scanIntervalMs ?? 2000;
+    this.targetPollIntervalMs = opts.targetPollIntervalMs ?? 3000;
   }
 
   getAttachedTargetIds(): string[] {
     return [...this.attached.keys()];
   }
 
+  getStatus(): CdpStatus {
+    const status: CdpStatus = {
+      state: this.state,
+      host: this.host,
+      port: this.port,
+      attachedTargets: this.getAttachedTargetIds(),
+    };
+    if (this.lastError) status.lastError = this.lastError;
+    return status;
+  }
+
+  /**
+   * Begin scanning for a Chrome CDP endpoint. Resolves immediately; does not
+   * require Chrome to be running yet.
+   */
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-
-    this.browserClient = await CDP({
-      host: this.host,
-      port: this.port,
-    });
-
-    const { Target } = this.browserClient;
-    await Target.setDiscoverTargets({ discover: true });
-
-    Target.targetCreated((evt) => {
-      void this.maybeAttach(evt.targetInfo);
-    });
-    Target.targetInfoChanged((evt) => {
-      void this.maybeAttach(evt.targetInfo);
-    });
-    Target.detachedFromTarget((evt) => {
-      if (evt.targetId) this.detachLocal(evt.targetId);
-    });
-
-    await this.refreshTargets();
-    this.pollTimer = setInterval(() => {
-      void this.refreshTargets();
-    }, 3000);
+    this.state = "scanning";
+    console.log(
+      `[cdp] scanning for Chrome debugging endpoint at ${this.host}:${this.port} …`,
+    );
+    this.startScanLoop();
+    // Opportunistic first attempt without waiting for the interval.
+    void this.tryConnect();
   }
 
   async stop(): Promise<void> {
     this.running = false;
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
-    for (const id of [...this.attached.keys()]) {
-      this.detachLocal(id);
-    }
-    if (this.browserClient) {
-      try {
-        await this.browserClient.close();
-      } catch {
-        /* ignore */
-      }
-      this.browserClient = null;
-    }
+    this.connectGeneration += 1;
+    this.stopScanLoop();
+    this.stopTargetPoll();
+    await this.teardownBrowser("stopped");
+    this.state = "scanning";
   }
 
   async attachTarget(targetId: string): Promise<boolean> {
-    if (!this.browserClient) return false;
-    const { targetInfos } = await this.browserClient.Target.getTargets();
-    const info = targetInfos.find((t: TargetInfo) => t.targetId === targetId);
-    if (!info) return false;
-    await this.maybeAttach(info);
-    return this.attached.has(targetId);
+    if (!this.browserClient || this.state !== "connected") return false;
+    try {
+      const { targetInfos } = await this.browserClient.Target.getTargets();
+      const info = targetInfos.find((t: TargetInfo) => t.targetId === targetId);
+      if (!info) return false;
+      await this.maybeAttach(info);
+      return this.attached.has(targetId);
+    } catch (err) {
+      await this.handleBrowserDisconnect(
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    }
+  }
+
+  private startScanLoop(): void {
+    if (this.scanTimer) return;
+    this.scanTimer = setInterval(() => {
+      void this.tryConnect();
+    }, this.scanIntervalMs);
+  }
+
+  private stopScanLoop(): void {
+    if (!this.scanTimer) return;
+    clearInterval(this.scanTimer);
+    this.scanTimer = null;
+  }
+
+  private startTargetPoll(): void {
+    if (this.targetPollTimer) return;
+    this.targetPollTimer = setInterval(() => {
+      void this.refreshTargets();
+    }, this.targetPollIntervalMs);
+  }
+
+  private stopTargetPoll(): void {
+    if (!this.targetPollTimer) return;
+    clearInterval(this.targetPollTimer);
+    this.targetPollTimer = null;
+  }
+
+  private async isCdpListening(): Promise<boolean> {
+    const url = `http://${this.host}:${this.port}/json/version`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(1000) });
+      if (!res.ok) return false;
+      const body = (await res.json()) as { webSocketDebuggerUrl?: string };
+      return typeof body.webSocketDebuggerUrl === "string";
+    } catch {
+      return false;
+    }
+  }
+
+  private async tryConnect(): Promise<void> {
+    if (!this.running || this.browserClient || this.connecting) return;
+    if (!(await this.isCdpListening())) return;
+
+    this.connecting = true;
+    const gen = ++this.connectGeneration;
+    try {
+      const client = await CDP({
+        host: this.host,
+        port: this.port,
+      });
+
+      if (!this.running || gen !== this.connectGeneration) {
+        try {
+          await client.close();
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+
+      this.browserClient = client;
+      this.state = "connected";
+      this.lastError = undefined;
+      this.stopScanLoop();
+
+      asEmitter(client).on("disconnect", () => {
+        void this.handleBrowserDisconnect("browser websocket closed");
+      });
+
+      const { Target } = client;
+      await Target.setDiscoverTargets({ discover: true });
+
+      Target.targetCreated((evt) => {
+        void this.maybeAttach(evt.targetInfo);
+      });
+      Target.targetInfoChanged((evt) => {
+        void this.maybeAttach(evt.targetInfo);
+      });
+      Target.detachedFromTarget((evt) => {
+        if (evt.targetId) this.detachLocal(evt.targetId);
+      });
+
+      await this.refreshTargets();
+      this.startTargetPoll();
+      console.log(`[cdp] connected to Chrome at ${this.host}:${this.port}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.lastError = message;
+      console.error(`[cdp] connect attempt failed: ${message}`);
+      await this.teardownBrowser("connect failed");
+      if (this.running) {
+        this.state = "scanning";
+        this.startScanLoop();
+      }
+    } finally {
+      this.connecting = false;
+    }
+  }
+
+  private async handleBrowserDisconnect(reason: string): Promise<void> {
+    if (!this.running) return;
+    if (this.handlingDisconnect) return;
+    if (!this.browserClient && this.state === "scanning") return;
+
+    this.handlingDisconnect = true;
+    try {
+      this.lastError = reason;
+      console.warn(
+        `[cdp] Chrome CDP lost (${reason}); returning to scan on ${this.host}:${this.port}`,
+      );
+      this.connectGeneration += 1;
+      this.stopTargetPoll();
+      await this.teardownBrowser(reason);
+      this.state = "scanning";
+      if (this.running) this.startScanLoop();
+    } finally {
+      this.handlingDisconnect = false;
+    }
+  }
+
+  private async teardownBrowser(_reason: string): Promise<void> {
+    for (const id of [...this.attached.keys()]) {
+      this.detachLocal(id);
+    }
+    const client = this.browserClient;
+    this.browserClient = null;
+    if (client) {
+      try {
+        asEmitter(client).removeAllListeners("disconnect");
+      } catch {
+        /* ignore */
+      }
+      try {
+        await client.close();
+      } catch {
+        /* ignore — already closed on crash */
+      }
+    }
   }
 
   private async refreshTargets(): Promise<void> {
-    if (!this.browserClient || !this.running) return;
+    if (!this.browserClient || !this.running || this.state !== "connected") {
+      return;
+    }
     try {
       const { targetInfos } = await this.browserClient.Target.getTargets();
       for (const info of targetInfos) {
         await this.maybeAttach(info);
       }
     } catch (err) {
-      console.error(
-        "[cdp] refreshTargets failed:",
-        err instanceof Error ? err.message : err,
-      );
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[cdp] refreshTargets failed:", message);
+      await this.handleBrowserDisconnect(message);
     }
   }
 
   private async maybeAttach(info: TargetInfo): Promise<void> {
-    if (!this.running) return;
+    if (!this.running || this.state !== "connected") return;
     if (info.type !== "page") return;
     if (this.attached.has(info.targetId)) return;
 
@@ -154,6 +320,15 @@ export class CdpManager {
       return;
     }
 
+    if (!this.running || this.state !== "connected") {
+      try {
+        await client.close();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
     const assembler = new RrAssembler(info.targetId);
     const attached: AttachedTarget = {
       targetId: info.targetId,
@@ -161,6 +336,10 @@ export class CdpManager {
       assembler,
     };
     this.attached.set(info.targetId, attached);
+
+    asEmitter(client).on("disconnect", () => {
+      this.detachLocal(info.targetId);
+    });
 
     // Only watch the top frame; iframe copies of this script no-op.
     // Debounce in-page so one click/Enter does not flood console.debug.
@@ -261,6 +440,11 @@ export class CdpManager {
     const a = this.attached.get(targetId);
     if (!a) return;
     this.attached.delete(targetId);
+    try {
+      asEmitter(a.client).removeAllListeners("disconnect");
+    } catch {
+      /* ignore */
+    }
     void a.client.close().catch(() => undefined);
     console.log(`[cdp] detached ${targetId}`);
   }

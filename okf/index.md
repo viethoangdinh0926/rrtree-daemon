@@ -21,7 +21,7 @@ Linux/Node daemon that attaches to Chrome via CDP and builds live request–resp
 ## Components
 
 * [Components index](components/index.md) - Runtime modules
-* [CdpManager](components/cdp-session.md) - Chrome attach, Network events, gestures
+* [CdpManager](components/cdp-session.md) - Scan/connect/reconnect CDP, attach pages, gestures
 * [RrAssembler](components/rr-assembler.md) - Request/response hop pairing and redirects
 * [Tree builder](components/tree-builder.md) - integrateNode, dedupe, parenting
 * [TreeStore](components/tree-store.md) - In-memory forest and patch events

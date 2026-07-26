@@ -25,22 +25,24 @@ Need a live request–response tree view for a Chrome browsing session.
    npm run build   # optional for production
    ```
 
-2. **Start Chrome** with remote debugging and a dedicated profile:
+2. **Start daemon** (Chrome can come later — daemon stays in `scanning`):
+   ```bash
+   npm run dev
+   # or: npm start
+   ```
+
+3. **Start Chrome** with remote debugging and a dedicated profile (any order vs step 2):
    ```bash
    # Linux
    google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/rrtree-chrome
    ```
    Verify: `curl http://127.0.0.1:9222/json/version`
 
-3. **Start daemon**
-   ```bash
-   npm run dev
-   # or: npm start
-   ```
+4. **Open UI**: http://127.0.0.1:7733/ — status moves from `scanning for Chrome…` to `connected · N targets · M trees`.
 
-4. **Open UI**: http://127.0.0.1:7733/
+5. Confirm log lines like `[cdp] connected to Chrome…` / `[cdp] attached page …`. `/health` includes `cdp.state` and `attachedTargets`.
 
-5. Confirm log lines like `[cdp] attached page …` and `/health` shows `attachedTargets`.
+6. If Chrome exits, the daemon logs CDP lost and returns to scanning until a new debug Chrome appears. Existing in-memory trees remain until deleted.
 
 # Env
 

@@ -681,17 +681,41 @@
         return escapeHtml(s).replace(/'/g, "&#39;");
       }
 
-      async function connect() {
+      function formatHealthStatus(health) {
+        const cdp = health.cdp || {};
+        const targets = health.attachedTargets?.length || 0;
+        const trees = health.treeCount || 0;
+        if (cdp.state === "scanning") {
+          const where = cdp.host && cdp.port ? `${cdp.host}:${cdp.port}` : "CDP";
+          return `scanning for Chrome on ${where} · ${trees} trees`;
+        }
+        return `connected · ${targets} targets · ${trees} trees`;
+      }
+
+      async function refreshHealth() {
         try {
           const h = await fetch("/health");
           const health = await h.json();
-          el.status.textContent = `ok · ${health.attachedTargets?.length || 0} targets · ${health.treeCount || 0} trees`;
-          el.status.classList.add("ok");
+          el.status.textContent = formatHealthStatus(health);
+          if (health.cdp?.state === "connected") el.status.classList.add("ok");
+          else el.status.classList.remove("ok");
+        } catch (e) {
+          el.status.textContent = "API unreachable";
+          el.status.classList.remove("ok");
+        }
+      }
+
+      async function connect() {
+        try {
+          await refreshHealth();
           await refreshTrees();
         } catch (e) {
           el.status.textContent = "API unreachable";
           el.status.classList.remove("ok");
         }
+        setInterval(() => {
+          void refreshHealth();
+        }, 2000);
 
         el.btnDeleteSelected.addEventListener("click", () => {
           if (state.selectedTreeId) void deleteTree(state.selectedTreeId);
@@ -711,7 +735,7 @@
             }
             if (data.op === "upsert" || data.op === "attach") {
               upsertNode(data);
-              el.status.textContent = `live · ${state.trees.length} trees`;
+              void refreshHealth();
               return;
             }
             if (data.op === "delete" && data.treeId) {
@@ -722,7 +746,7 @@
               } else {
                 renderTree();
               }
-              el.status.textContent = `live · ${state.trees.length} trees`;
+              void refreshHealth();
               return;
             }
             if (data.op === "clear") {
@@ -733,7 +757,7 @@
               renderTreeList();
               renderTree();
               renderDetail(null);
-              el.status.textContent = "live · 0 trees";
+              void refreshHealth();
             }
           } catch {
             /* ignore */

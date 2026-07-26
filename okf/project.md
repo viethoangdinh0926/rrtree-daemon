@@ -34,8 +34,8 @@ This project is a **causal session model**, not another waterfall viewer.
 
 | Setting | Default |
 |---------|---------|
-| CDP | `127.0.0.1:9222` |
-| API/UI | `http://127.0.0.1:7733` |
+| CDP | `127.0.0.1:9222` (daemon scans; reconnects if Chrome dies) |
+| API/UI | `http://127.0.0.1:7733` (starts even while CDP is scanning) |
 | Body capture | on (`CAPTURE_BODIES!=0`), 256 KiB cap |
 
 ## Agent knowledge
