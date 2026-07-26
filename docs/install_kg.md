@@ -1,5 +1,7 @@
 # How to create a knowlege graph and wire it to Devin/Claude Code/Cursor
 
+CodeGraph answers *where* (symbols, callers, files). Product/context knowledge lives in the OKF bundle under [`okf/`](../okf/index.md). Agents should use **both** — see [`AGENTS.md`](../AGENTS.md). They are not mutually exclusive.
+
 ---
 
 ## **Step 1: Install and Initialize CodeGraph Locally**
