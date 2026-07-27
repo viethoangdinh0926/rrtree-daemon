@@ -23,10 +23,13 @@ Static UI            — live expandable tree; scanning vs connected status
 ## Causality rules
 
 1. **Redirect**: same CDP `requestId` with `redirectResponse` → finish previous hop, new hop child with `edgeType=redirect`.
-2. **Document root**: `resourceType=Document` and initiator `other` (or first nav after gesture with no parent doc).
-3. **script_nav**: Document with initiator `script` → child of active document in frame/target.
+2. **Document root** (only two cases): a **top-level frame** Document with browser-initiated initiator `other` and no recent in-page gesture (address bar / bookmark / reload / restore), **or** the first gesture-attributed Document when the page has no root node yet.
+3. **script_nav**: Document with initiator `script` → child of active document in frame/target; dropped when no document is known.
 4. **user_interaction**: Document with recent click/keydown (≈2s) and non-script initiator → child of active document when one exists.
-5. **Subresources**: prefer `initiator.requestId`, else `loaderId` → document, else `frameId` → document.
+5. **Subresources**: prefer `loaderId` → document, else same-load `initiator.requestId`, else `frameId` → document, else active document for the target.
+6. **No stray roots**: subframe Documents, script navigations, and subresources that cannot be attached are dropped instead of creating a tree.
+
+Top-level frames are learned from `Page.getFrameTree` on attach and `Page.frameNavigated` (frames without `parentId`), stored in `TreeState.mainFrameByTarget`.
 
 ## Gesture signal
 

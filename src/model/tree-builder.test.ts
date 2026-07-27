@@ -10,6 +10,7 @@ import {
   integrateNode,
   recordGesture,
   resetTreeSeq,
+  setMainFrame,
 } from "./tree-builder.js";
 import type {
   CdpLoadingFailed,
@@ -442,6 +443,204 @@ describe("duplicate Document roots", () => {
     })) {
       integrateNode(state, a.node);
     }
+    expect(state.trees.size).toBe(0);
+  });
+});
+
+describe("root creation policy", () => {
+  beforeEach(() => {
+    resetAssemblerSeq();
+    resetTreeSeq();
+  });
+
+  function docRequest(
+    overrides: Partial<CdpRequestWillBeSent> & { requestId: string },
+  ): CdpRequestWillBeSent {
+    return {
+      loaderId: "L1",
+      frameId: "MAIN",
+      request: { url: "https://example.com/page", method: "GET", headers: {} },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+      ...overrides,
+    } as CdpRequestWillBeSent;
+  }
+
+  it("roots a tree for a top-level address-bar navigation", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "typed" }),
+    )) {
+      integrateNode(state, a.node);
+    }
+
+    expect(state.trees.size).toBe(1);
+    const root = [...state.nodes.values()][0]!;
+    expect(root.parentId).toBeUndefined();
+    expect(root.url).toBe("https://example.com/page");
+  });
+
+  it("does not root a tree for a subframe Document with no known page", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({
+        requestId: "iframe",
+        frameId: "SUB",
+        loaderId: "Lsub",
+        request: {
+          url: "https://ads.example.com/frame.html",
+          method: "GET",
+          headers: {},
+        },
+      }),
+    )) {
+      integrateNode(state, a.node);
+    }
+
+    expect(state.trees.size).toBe(0);
+    expect(state.nodes.size).toBe(0);
+  });
+
+  it("nests a subframe Document under the page document", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "page" }),
+    )) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({
+        requestId: "iframe",
+        frameId: "SUB",
+        loaderId: "L1",
+        timestamp: 2,
+        request: {
+          url: "https://ads.example.com/frame.html",
+          method: "GET",
+          headers: {},
+        },
+      }),
+    )) {
+      integrateNode(state, a.node);
+    }
+
+    expect(state.trees.size).toBe(1);
+    const page = [...state.nodes.values()].find((n) => n.url.endsWith("/page"))!;
+    const frame = [...state.nodes.values()].find((n) =>
+      n.url.endsWith("/frame.html"),
+    )!;
+    expect(frame.parentId).toBe(page.id);
+  });
+
+  it("drops orphan subresources instead of rooting a tree", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "orphan-css",
+      loaderId: "Lunknown",
+      frameId: "SUB",
+      request: {
+        url: "https://example.com/orphan.css",
+        method: "GET",
+        headers: {},
+      },
+      timestamp: 1,
+      initiator: { type: "parser" },
+      type: "Stylesheet",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    expect(state.trees.size).toBe(0);
+    expect(state.nodes.size).toBe(0);
+  });
+
+  it("roots a tree when a gesture navigates a page that has no root yet", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+    recordGesture(state, { ts: Date.now(), kind: "click", targetId: "T1" });
+
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({
+        requestId: "clicked",
+        request: {
+          url: "https://example.com/clicked",
+          method: "GET",
+          headers: {},
+        },
+      }),
+    )) {
+      integrateNode(state, a.node);
+    }
+
+    expect(state.trees.size).toBe(1);
+    const root = [...state.nodes.values()][0]!;
+    expect(root.edgeType).toBe("user_interaction");
+    expect(root.parentId).toBeUndefined();
+  });
+
+  it("does not root a second tree when a gesture navigates a tracked page", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "page" }),
+    )) {
+      integrateNode(state, a.node);
+    }
+    recordGesture(state, { ts: Date.now(), kind: "click", targetId: "T1" });
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({
+        requestId: "clicked",
+        loaderId: "L2",
+        timestamp: 2,
+        request: {
+          url: "https://example.com/clicked",
+          method: "GET",
+          headers: {},
+        },
+      }),
+    )) {
+      integrateNode(state, a.node);
+    }
+
+    expect(state.trees.size).toBe(1);
+    const page = [...state.nodes.values()].find((n) => n.url.endsWith("/page"))!;
+    const clicked = [...state.nodes.values()].find((n) =>
+      n.url.endsWith("/clicked"),
+    )!;
+    expect(clicked.parentId).toBe(page.id);
+    expect(clicked.edgeType).toBe("user_interaction");
+  });
+
+  it("drops script navigations with no known page document", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({
+        requestId: "script-nav",
+        initiator: { type: "script" },
+      }),
+    )) {
+      integrateNode(state, a.node);
+    }
+
     expect(state.trees.size).toBe(0);
   });
 });

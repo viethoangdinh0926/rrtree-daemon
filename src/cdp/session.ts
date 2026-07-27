@@ -372,6 +372,20 @@ export class CdpManager {
       await client.Runtime.enable();
       await client.Page.addScriptToEvaluateOnNewDocument({ source: gestureHook });
 
+      // Main-frame id: only top-level browser-initiated navigations may root a tree.
+      try {
+        const { frameTree } = await client.Page.getFrameTree();
+        const mainFrameId = frameTree?.frame?.id;
+        if (mainFrameId) this.store.setMainFrame(info.targetId, mainFrameId);
+      } catch {
+        /* frame tree unavailable; root policy stays permissive */
+      }
+
+      client.Page.frameNavigated((params) => {
+        const frame = params.frame as { id: string; parentId?: string };
+        if (!frame.parentId) this.store.setMainFrame(info.targetId, frame.id);
+      });
+
       client.Network.requestWillBeSent((params) => {
         this.onRequestWillBeSent(attached, params as CdpRequestWillBeSent);
       });

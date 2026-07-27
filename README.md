@@ -2,7 +2,12 @@
 
 Linux daemon that attaches to **Google Chrome / Chromium** over the **Chrome DevTools Protocol (CDP)** and builds **live request–response causality trees**.
 
-Each tree is rooted at a user-triggered (or address-bar) document navigation. Child nodes are request–response pairs caused by:
+A tree root is created **only** when either:
+
+- the user types an address in a tab's address bar and hits Enter (top-level, browser-initiated navigation with no in-page gesture — bookmarks, reload, and session restore look the same to CDP), or
+- the user interacts with a page component (click / Enter) **and** that page has no root node yet.
+
+Every other request–response pair is attached under an existing node; nodes that cannot be attached (iframe documents, script navigations, or subresources with no known page) are dropped instead of starting a new tree. Child nodes are request–response pairs caused by:
 
 
 | Edge                | Meaning                                                   |

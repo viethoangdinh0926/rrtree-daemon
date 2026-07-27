@@ -7,6 +7,7 @@ import {
   integrateNode,
   listTrees,
   recordGesture,
+  setMainFrame,
   type TreeState,
 } from "./tree-builder.js";
 import type { RrNode, TreePatch, UserGesture } from "./types.js";
@@ -20,6 +21,10 @@ export class TreeStore extends EventEmitter {
       this.emit("patch", p);
     }
     return patches;
+  }
+
+  setMainFrame(targetId: string, frameId: string): void {
+    setMainFrame(this.state, targetId, frameId);
   }
 
   gesture(g: UserGesture): void {

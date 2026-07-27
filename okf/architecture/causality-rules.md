@@ -27,9 +27,20 @@ Implemented primarily in [`resolveParent`](../../src/model/tree-builder.ts) and 
 
 ## Document roots
 
-- Address-bar style Document (`initiator` `other`/`parser`) without a usable gesture → **new root**.
-- Gesture present → prefer child of current frame/target document with `user_interaction`, then consume gesture.
+Only two situations create a root (tree):
+
+1. **Address-bar navigation** — Document in the **top-level frame** with browser-initiated initiator (`other`), and no recent in-page gesture. Omnibox typing/Enter never reaches the injected page hook, so the absence of a gesture is the address-bar signal. Bookmarks, reload, session restore, and back/forward look identical and also root a tree.
+2. **First interaction on an untracked page** — a gesture-attributed Document when no page document exists yet for that frame/target.
+
+Everything else is attached or discarded:
+
+- Gesture present **and** a page document exists → `user_interaction` child; gesture is consumed.
+- Subframe Documents → child of the embedding document; **dropped** when no page document is known.
+- `script` Documents → `script_nav` child; **dropped** when no page document is known.
+- Orphan subresources (no loader/frame/target document) → **dropped**, never rooted.
 - Duplicate same-URL Documents within ~15s fold into a canonical Document; empty sibling roots are pruned.
+
+Top-level detection uses `TreeState.mainFrameByTarget`, populated by `setMainFrame` from `Page.getFrameTree` at attach and `Page.frameNavigated` (frames without `parentId`). When the main frame is unknown the policy stays permissive (treats the Document as top-level) so capture still works before the frame tree arrives.
 
 ## Subresources (post-navigation)
 

@@ -29,15 +29,16 @@ sources:
 | `deleteTree` / `clearTrees` | User-driven cleanup |
 | `findCanonicalDocument` | Same-URL provisional Document fold (~15s) |
 | `pruneEmptyRootsForUrl` | Drop empty duplicate roots |
+| `setMainFrame` | Record a target's top-level frame so only top-level navigations may root a tree |
 
 ## Indexes (`TreeState`)
 
 - `requestIdToNodeId`, `loaderToDocument`, `frameToDocument`
-- `targetToActiveTree`, `nodeIdAlias`, `recentGestures`
+- `targetToActiveTree`, `nodeIdAlias`, `mainFrameByTarget`, `recentGestures`
 
 ## Tests
 
-Covered by [`src/model/tree-builder.test.ts`](../../src/model/tree-builder.test.ts): redirects, assets+fetch, script_nav, user_interaction, root dedupe, gesture consume, subresource parenting under click nav.
+Covered by [`src/model/tree-builder.test.ts`](../../src/model/tree-builder.test.ts): redirects, assets+fetch, script_nav, user_interaction, root dedupe, gesture consume, subresource parenting under click nav, and the root creation policy (address-bar root, first-gesture root, subframe/script/orphan nodes never rooting).
 
 ## Related
 

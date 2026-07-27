@@ -33,6 +33,12 @@ declare module "chrome-remote-interface" {
       addScriptToEvaluateOnNewDocument: (opts: {
         source: string;
       }) => Promise<unknown>;
+      getFrameTree: () => Promise<{
+        frameTree: { frame: { id: string; parentId?: string } };
+      }>;
+      frameNavigated: (cb: (params: {
+        frame: { id: string; parentId?: string; url?: string };
+      }) => void) => void;
     };
     Runtime: {
       enable: () => Promise<void>;

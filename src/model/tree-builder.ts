@@ -25,6 +25,8 @@ export interface TreeState {
   targetToActiveTree: Map<string, string>;
   /** Duplicate provisional node ids → canonical node id. */
   nodeIdAlias: Map<string, string>;
+  /** targetId → main (top-level) frameId. */
+  mainFrameByTarget: Map<string, string>;
   recentGestures: UserGesture[];
 }
 
@@ -37,8 +39,31 @@ export function createTreeState(): TreeState {
     frameToDocument: new Map(),
     targetToActiveTree: new Map(),
     nodeIdAlias: new Map(),
+    mainFrameByTarget: new Map(),
     recentGestures: [],
   };
+}
+
+/** Record the top-level frame of a page target (from CDP frame tree). */
+export function setMainFrame(
+  state: TreeState,
+  targetId: string,
+  frameId: string,
+): void {
+  state.mainFrameByTarget.set(targetId, frameId);
+}
+
+/**
+ * True when the Document belongs to the tab's top-level frame. Unknown frame
+ * trees stay permissive so capture still works before Page.getFrameTree lands.
+ */
+function isTopLevelDocument(state: TreeState, node: RrNode): boolean {
+  if (!node.frameId) return true;
+  const main = node.targetId
+    ? state.mainFrameByTarget.get(node.targetId)
+    : undefined;
+  if (!main) return true;
+  return node.frameId === main;
 }
 
 function normalizeUrl(url: string): string {
@@ -263,7 +288,7 @@ function isDocument(node: RrNode): boolean {
 function resolveParent(
   state: TreeState,
   node: RrNode,
-): { parentId?: string; edgeType: EdgeType; newRoot: boolean } {
+): { parentId?: string; edgeType: EdgeType; newRoot: boolean; drop?: boolean } {
   // Redirect hops already carry parent/edge from assembler.
   if (node.edgeType === "redirect" && node.parentId) {
     return { parentId: node.parentId, edgeType: "redirect", newRoot: false };
@@ -275,14 +300,15 @@ function resolveParent(
 
   if (isDocument(node)) {
     const gesture = findRecentGesture(state, node, now);
+    const parentDoc =
+      (node.frameId && state.frameToDocument.get(node.frameId)) ||
+      (node.loaderId && state.loaderToDocument.get(node.loaderId)) ||
+      findActiveDocumentForTarget(state, node.targetId);
 
     // Prefer recent user gesture over initiator classification (click on <a>, etc.).
     // Consume after first Document so one click does not tag every iframe Document.
     if (gesture) {
       consumeGesture(state, gesture);
-      const parentDoc =
-        (node.frameId && state.frameToDocument.get(node.frameId)) ||
-        findActiveDocumentForTarget(state, node.targetId);
       if (parentDoc && parentDoc !== node.id) {
         return {
           parentId: parentDoc,
@@ -290,25 +316,35 @@ function resolveParent(
           newRoot: false,
         };
       }
+      // Interaction on a page whose root node does not exist yet.
       return { newRoot: true, edgeType: "user_interaction" };
     }
 
     if (initiatorType === "script") {
-      const parentDoc =
-        (node.frameId && state.frameToDocument.get(node.frameId)) ||
-        (node.loaderId && state.loaderToDocument.get(node.loaderId)) ||
-        findActiveDocumentForTarget(state, node.targetId);
       if (parentDoc && parentDoc !== node.id) {
         return { parentId: parentDoc, edgeType: "script_nav", newRoot: false };
       }
+      return { newRoot: false, edgeType: "script_nav", drop: true };
     }
 
-    // Typical address-bar / restored / link without recorded gesture.
-    if (initiatorType === "other" || initiatorType === "parser") {
+    // Browser-initiated top-level navigation: address bar, bookmark, restore.
+    if (isTopLevelDocument(state, node)) {
       return { newRoot: true, edgeType: "other" };
     }
 
-    return { newRoot: true, edgeType: mapInitiatorToEdge(initiatorType) };
+    // Subframe document: child of its embedder, never a root.
+    if (parentDoc && parentDoc !== node.id) {
+      return {
+        parentId: parentDoc,
+        edgeType: mapInitiatorToEdge(initiatorType),
+        newRoot: false,
+      };
+    }
+    return {
+      newRoot: false,
+      edgeType: mapInitiatorToEdge(initiatorType),
+      drop: true,
+    };
   }
 
   // Subresources belong to a navigation (loaderId), not to the session tree root.
@@ -354,8 +390,8 @@ function resolveParent(
     return { parentId: activeDocId, edgeType: edge, newRoot: false };
   }
 
-  // Last resort: new tree rooted at this node (unusual for subresources).
-  return { newRoot: true, edgeType: edge };
+  // No owning document: subresources never start a tree.
+  return { newRoot: false, edgeType: edge, drop: true };
 }
 
 function isUnderNode(
@@ -494,7 +530,9 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
     }
   }
 
-  const { parentId, edgeType, newRoot } = resolveParent(state, working);
+  const { parentId, edgeType, newRoot, drop } = resolveParent(state, working);
+  if (drop) return patches;
+
   const node: RrNode = {
     ...working,
     parentId: parentId ?? working.parentId,
@@ -502,7 +540,13 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
     children: [],
   };
 
-  if (newRoot || !node.parentId || !state.nodes.has(node.parentId)) {
+  // Only address-bar navigations and first-gesture pages may root a tree.
+  const resolvedParentId = node.parentId;
+  if (!newRoot && (!resolvedParentId || !state.nodes.has(resolvedParentId))) {
+    return patches;
+  }
+
+  if (newRoot) {
     const treeId = newTreeId();
     node.treeId = treeId;
     node.parentId = undefined;
@@ -530,7 +574,7 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
     return patches;
   }
 
-  const parent = state.nodes.get(node.parentId)!;
+  const parent = state.nodes.get(resolvedParentId!)!;
   node.treeId = parent.treeId;
   if (!parent.children.includes(node.id)) {
     parent.children.push(node.id);
@@ -665,6 +709,7 @@ export function clearTrees(state: TreeState): number {
   state.frameToDocument.clear();
   state.targetToActiveTree.clear();
   state.nodeIdAlias.clear();
+  state.mainFrameByTarget.clear();
   return count;
 }
 
