@@ -20,7 +20,7 @@ Implemented primarily in [`resolveParent`](../../src/model/tree-builder.ts) and 
 
 | Edge | When |
 |------|------|
-| `redirect` | Same CDP `requestId` with `redirectResponse` → previous hop finished, new hop child |
+| `redirect` | Same CDP `requestId` with `redirectResponse` → previous hop finished, new hop child; also a restarted navigation matched to a recent 3xx `Location` |
 | `user_interaction` | Document after recent click/Enter gesture; consumed after first Document |
 | `script_nav` | Document with initiator `script` under active frame/target document |
 | `parser` / `script` / `preload` / `other` | Subresources via initiator + navigation load |
@@ -31,6 +31,8 @@ Only two situations create a root (tree):
 
 1. **Address-bar navigation** — Document in the **top-level frame** with browser-initiated initiator (`other`), and no recent in-page gesture. Omnibox typing/Enter never reaches the injected page hook, so the absence of a gesture is the address-bar signal. Bookmarks, reload, session restore, and back/forward look identical and also root a tree.
 2. **First interaction on an untracked page** — a gesture-attributed Document when no page document exists yet for that frame/target.
+
+**Redirects never create a tree.** Before the root rules run, a Document is matched against recent (<15s, same target) Documents with a 3xx status whose `Location` header (resolved against the responding URL, case-insensitive header lookup) equals the new URL — this covers cross-process / restarted navigations that Chrome reports with a **new** `requestId` and no `redirectResponse`. Such hops become `redirect` children. A redirect hop whose previous hop was pruned falls back to the frame/loader/target document, or is dropped; it never roots a tree.
 
 Everything else is attached or discarded:
 

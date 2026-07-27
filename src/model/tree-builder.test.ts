@@ -84,6 +84,194 @@ describe("redirect chain", () => {
   });
 });
 
+describe("redirects never create a new tree", () => {
+  beforeEach(() => {
+    resetAssemblerSeq();
+    resetTreeSeq();
+  });
+
+  it("keeps a restarted navigation (new requestId) in the same tree", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "nav-1",
+      loaderId: "L1",
+      frameId: "MAIN",
+      request: { url: "https://example.com/old", method: "GET", headers: {} },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleResponseReceived({
+      requestId: "nav-1",
+      loaderId: "L1",
+      frameId: "MAIN",
+      timestamp: 2,
+      type: "Document",
+      response: {
+        url: "https://example.com/old",
+        status: 302,
+        headers: { Location: "https://other.example.com/new" },
+      },
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    // Chrome restarts the navigation in a new process: fresh requestId/loaderId,
+    // browser-initiated initiator, no redirectResponse on the event.
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "nav-2",
+      loaderId: "L2",
+      frameId: "MAIN",
+      request: {
+        url: "https://other.example.com/new",
+        method: "GET",
+        headers: {},
+      },
+      timestamp: 3,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    expect(state.trees.size).toBe(1);
+    const old = [...state.nodes.values()].find((n) => n.url.endsWith("/old"))!;
+    const next = [...state.nodes.values()].find((n) => n.url.endsWith("/new"))!;
+    expect(next.parentId).toBe(old.id);
+    expect(next.edgeType).toBe("redirect");
+    expect(old.children).toContain(next.id);
+  });
+
+  it("resolves a relative Location header to the same tree", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "nav-1",
+      loaderId: "L1",
+      frameId: "MAIN",
+      request: { url: "https://example.com/from", method: "GET", headers: {} },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleResponseReceived({
+      requestId: "nav-1",
+      loaderId: "L1",
+      frameId: "MAIN",
+      timestamp: 2,
+      type: "Document",
+      response: {
+        url: "https://example.com/from",
+        status: 301,
+        headers: { location: "/to" },
+      },
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "nav-2",
+      loaderId: "L2",
+      frameId: "MAIN",
+      request: { url: "https://example.com/to", method: "GET", headers: {} },
+      timestamp: 3,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    expect(state.trees.size).toBe(1);
+    const to = [...state.nodes.values()].find((n) => n.url.endsWith("/to"))!;
+    expect(to.edgeType).toBe("redirect");
+  });
+
+  it("does not root a tree for a redirect hop whose previous hop is gone", () => {
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+    const now = Date.now();
+
+    integrateNode(state, {
+      id: "hop-2",
+      requestId: "r",
+      url: "https://example.com/b",
+      method: "GET",
+      resourceType: "Document",
+      requestHeaders: {},
+      responseHeaders: {},
+      frameId: "MAIN",
+      loaderId: "Lgone",
+      targetId: "T1",
+      parentId: "hop-1-deleted",
+      edgeType: "redirect",
+      initiator: { type: "other" },
+      children: [],
+      createdAt: now,
+      updatedAt: now,
+      hasResponse: false,
+      finished: false,
+    });
+
+    expect(state.trees.size).toBe(0);
+    expect(state.nodes.size).toBe(0);
+  });
+
+  it("does not create a second tree for an unrelated same-target navigation", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "nav-1",
+      loaderId: "L1",
+      frameId: "MAIN",
+      request: { url: "https://example.com/one", method: "GET", headers: {} },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleResponseReceived({
+      requestId: "nav-1",
+      loaderId: "L1",
+      frameId: "MAIN",
+      timestamp: 2,
+      type: "Document",
+      response: {
+        url: "https://example.com/one",
+        status: 200,
+        headers: {},
+        mimeType: "text/html",
+      },
+    })) {
+      integrateNode(state, a.node);
+    }
+    // Address-bar navigation to an unrelated URL: still its own tree.
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "nav-2",
+      loaderId: "L2",
+      frameId: "MAIN",
+      request: { url: "https://example.com/two", method: "GET", headers: {} },
+      timestamp: 3,
+      initiator: { type: "other" },
+      type: "Document",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    expect(state.trees.size).toBe(2);
+  });
+});
+
 describe("document + assets + fetch", () => {
   it("attaches parser children and script fetch under initiator", () => {
     const { state } = replay(loadFixture("document-assets-fetch.json"));

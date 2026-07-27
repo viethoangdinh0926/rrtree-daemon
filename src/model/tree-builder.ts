@@ -11,6 +11,8 @@ const GESTURE_WINDOW_MS = 2000;
 const GESTURE_DEDUP_MS = 400;
 /** Collapse duplicate empty Document roots for the same URL within this window. */
 const ROOT_DEDUP_MS = 15_000;
+/** Link a restarted navigation to the 3xx document that pointed at it. */
+const REDIRECT_LINK_MS = 15_000;
 
 export interface TreeState {
   nodes: Map<string, RrNode>;
@@ -74,6 +76,52 @@ function normalizeUrl(url: string): string {
   } catch {
     return url;
   }
+}
+
+function headerValue(
+  headers: Record<string, string>,
+  name: string,
+): string | undefined {
+  const lower = name.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === lower) return headers[key];
+  }
+  return undefined;
+}
+
+/**
+ * Chrome restarts some navigations (cross-process / server redirect) with a new
+ * CDP requestId, so the hop arrives without `redirectResponse`. Find the recent
+ * 3xx Document whose `Location` points at this URL so the hop stays in the same
+ * tree instead of rooting a new one.
+ */
+function findRedirectingDocument(
+  state: TreeState,
+  node: RrNode,
+): string | undefined {
+  if (!isDocument(node)) return undefined;
+  const url = normalizeUrl(node.url);
+  let best: RrNode | undefined;
+  for (const cand of state.nodes.values()) {
+    if (!isDocument(cand) || cand.id === node.id) continue;
+    if (node.targetId && cand.targetId && cand.targetId !== node.targetId) {
+      continue;
+    }
+    const age = node.createdAt - cand.createdAt;
+    if (age < 0 || age > REDIRECT_LINK_MS) continue;
+    if (!cand.status || cand.status < 300 || cand.status > 399) continue;
+    const location = headerValue(cand.responseHeaders, "location");
+    if (!location) continue;
+    let resolved: string;
+    try {
+      resolved = normalizeUrl(new URL(location, cand.url).href);
+    } catch {
+      continue;
+    }
+    if (resolved !== url) continue;
+    if (!best || cand.createdAt > best.createdAt) best = cand;
+  }
+  return best?.id;
 }
 
 function resolveCanonicalId(state: TreeState, id: string): string {
@@ -289,16 +337,35 @@ function resolveParent(
   state: TreeState,
   node: RrNode,
 ): { parentId?: string; edgeType: EdgeType; newRoot: boolean; drop?: boolean } {
-  // Redirect hops already carry parent/edge from assembler.
-  if (node.edgeType === "redirect" && node.parentId) {
-    return { parentId: node.parentId, edgeType: "redirect", newRoot: false };
-  }
-
   const initiatorType = node.initiator?.type ?? "other";
   const initiatorReqId = node.initiator?.requestId;
   const now = node.createdAt;
 
+  // Redirect hops already carry parent/edge from assembler.
+  if (node.edgeType === "redirect" && node.parentId) {
+    if (state.nodes.has(node.parentId)) {
+      return { parentId: node.parentId, edgeType: "redirect", newRoot: false };
+    }
+    // Prior hop was pruned: a redirect hop must never start its own tree.
+    if (isDocument(node)) {
+      const fallbackDoc =
+        (node.frameId && state.frameToDocument.get(node.frameId)) ||
+        (node.loaderId && state.loaderToDocument.get(node.loaderId)) ||
+        findActiveDocumentForTarget(state, node.targetId);
+      if (fallbackDoc && fallbackDoc !== node.id) {
+        return { parentId: fallbackDoc, edgeType: "redirect", newRoot: false };
+      }
+      return { newRoot: false, edgeType: "redirect", drop: true };
+    }
+  }
+
   if (isDocument(node)) {
+    // Restarted navigation for a 3xx we already recorded → same tree.
+    const redirectingDoc = findRedirectingDocument(state, node);
+    if (redirectingDoc) {
+      return { parentId: redirectingDoc, edgeType: "redirect", newRoot: false };
+    }
+
     const gesture = findRecentGesture(state, node, now);
     const parentDoc =
       (node.frameId && state.frameToDocument.get(node.frameId)) ||

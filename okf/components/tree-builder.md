@@ -30,6 +30,7 @@ sources:
 | `findCanonicalDocument` | Same-URL provisional Document fold (~15s) |
 | `pruneEmptyRootsForUrl` | Drop empty duplicate roots |
 | `setMainFrame` | Record a target's top-level frame so only top-level navigations may root a tree |
+| `findRedirectingDocument` | Link a restarted navigation to the recent 3xx Document whose `Location` points at it |
 
 ## Indexes (`TreeState`)
 

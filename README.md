@@ -7,6 +7,8 @@ A tree root is created **only** when either:
 - the user types an address in a tab's address bar and hits Enter (top-level, browser-initiated navigation with no in-page gesture — bookmarks, reload, and session restore look the same to CDP), or
 - the user interacts with a page component (click / Enter) **and** that page has no root node yet.
 
+**Redirects never start a new tree** — the whole hop chain stays in the tree of the navigation that triggered it, including cross-process redirects that Chrome reports as a brand new request (matched via the previous hop's 3xx `Location`).
+
 Every other request–response pair is attached under an existing node; nodes that cannot be attached (iframe documents, script navigations, or subresources with no known page) are dropped instead of starting a new tree. Child nodes are request–response pairs caused by:
 
 

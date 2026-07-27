@@ -22,7 +22,7 @@ Static UI            — live expandable tree; scanning vs connected status
 
 ## Causality rules
 
-1. **Redirect**: same CDP `requestId` with `redirectResponse` → finish previous hop, new hop child with `edgeType=redirect`.
+1. **Redirect**: same CDP `requestId` with `redirectResponse` → finish previous hop, new hop child with `edgeType=redirect`. Restarted navigations (cross-process redirects arrive with a **new** `requestId`) are matched to a recent 3xx Document whose `Location` resolves to the new URL, so a redirect **never** starts a new tree.
 2. **Document root** (only two cases): a **top-level frame** Document with browser-initiated initiator `other` and no recent in-page gesture (address bar / bookmark / reload / restore), **or** the first gesture-attributed Document when the page has no root node yet.
 3. **script_nav**: Document with initiator `script` → child of active document in frame/target; dropped when no document is known.
 4. **user_interaction**: Document with recent click/keydown (≈2s) and non-script initiator → child of active document when one exists.

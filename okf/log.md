@@ -5,6 +5,7 @@
 - Root creation restricted: a tree root is now created **only** for a top-level browser-initiated Document (address-bar/bookmark/reload/restore, no in-page gesture) or for the first gesture-attributed Document on a page with no root yet. Subframe Documents, `script` navigations, and orphan subresources attach to a known document or are dropped instead of minting trees (`resolveParent`/`integrateNode` in `src/model/tree-builder.ts`).
 - Added `TreeState.mainFrameByTarget` + `setMainFrame`, exposed via `TreeStore.setMainFrame` and fed from `Page.getFrameTree` / `Page.frameNavigated` in `src/cdp/session.ts`; `Page` domain typings extended in `src/types/chrome-remote-interface.d.ts`.
 - New `root creation policy` tests in `src/model/tree-builder.test.ts`; updated [Causality rules](architecture/causality-rules.md) and [Tree builder](components/tree-builder.md).
+- Redirects never create a tree: `findRedirectingDocument` links a restarted navigation (new CDP `requestId`, no `redirectResponse`) to the recent 3xx Document whose resolved `Location` matches, and an orphaned redirect hop falls back to the frame/loader/target document or is dropped (`src/model/tree-builder.ts`). Covered by the `redirects never create a new tree` tests.
 
 ## 2026-07-26
 
