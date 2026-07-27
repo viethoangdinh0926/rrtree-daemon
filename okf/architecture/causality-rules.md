@@ -27,9 +27,11 @@ Implemented primarily in [`resolveParent`](../../src/model/tree-builder.ts) and 
 
 ## Document roots
 
-Only two situations create a root (tree):
+**One tree per target (tab).** A root is only created when the target has no attachable document yet — `findAttachableDocument` checks the node's frame document, its loader document, then the target's active tree (falling back to that tree's root). Any hit means the tab already has a tree, so the navigation becomes a child instead of a second root. A tab can root again only after its tree is deleted (`deleteTree` clears the frame/loader/target indexes) or the forest is cleared.
 
-1. **Address-bar navigation** — Document in the **top-level frame** with browser-initiated initiator (`other`), and no recent in-page gesture. Omnibox typing/Enter never reaches the injected page hook, so the absence of a gesture is the address-bar signal. Bookmarks, reload, session restore, and back/forward look identical and also root a tree.
+Given no attachable document, a root is created for:
+
+1. **Address-bar navigation** — Document in the **top-level frame** with browser-initiated initiator (`other`), and no recent in-page gesture. Omnibox typing/Enter never reaches the injected page hook, so the absence of a gesture is the address-bar signal. Bookmarks, reload, session restore, and back/forward look identical.
 2. **First interaction on an untracked page** — a gesture-attributed Document when no page document exists yet for that frame/target.
 
 **Redirects never create a tree.** Before the root rules run, a Document is matched against recent (<15s, same target) Documents with a 3xx status whose `Location` header (resolved against the responding URL, case-insensitive header lookup) equals the new URL — this covers cross-process / restarted navigations that Chrome reports with a **new** `requestId` and no `redirectResponse`. Such hops become `redirect` children. A redirect hop whose previous hop was pruned falls back to the frame/loader/target document, or is dropped; it never roots a tree.
@@ -37,6 +39,7 @@ Only two situations create a root (tree):
 Everything else is attached or discarded:
 
 - Gesture present **and** a page document exists → `user_interaction` child; gesture is consumed.
+- Browser-initiated top-level navigation in a tab that already has a tree → `other` child of the tab's current document (session keeps growing in one tree).
 - Subframe Documents → child of the embedding document; **dropped** when no page document is known.
 - `script` Documents → `script_nav` child; **dropped** when no page document is known.
 - Orphan subresources (no loader/frame/target document) → **dropped**, never rooted.

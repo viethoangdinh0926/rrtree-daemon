@@ -224,7 +224,7 @@ describe("redirects never create a new tree", () => {
     expect(state.nodes.size).toBe(0);
   });
 
-  it("does not create a second tree for an unrelated same-target navigation", () => {
+  it("keeps an unrelated address-bar navigation in the target's only tree", () => {
     const assembler = new RrAssembler("T1");
     const state = createTreeState();
     setMainFrame(state, "T1", "MAIN");
@@ -255,7 +255,7 @@ describe("redirects never create a new tree", () => {
     })) {
       integrateNode(state, a.node);
     }
-    // Address-bar navigation to an unrelated URL: still its own tree.
+    // Address-bar navigation to an unrelated URL: same tab, so same tree.
     for (const a of assembler.handleRequestWillBeSent({
       requestId: "nav-2",
       loaderId: "L2",
@@ -268,7 +268,11 @@ describe("redirects never create a new tree", () => {
       integrateNode(state, a.node);
     }
 
-    expect(state.trees.size).toBe(2);
+    expect(state.trees.size).toBe(1);
+    const one = [...state.nodes.values()].find((n) => n.url.endsWith("/one"))!;
+    const two = [...state.nodes.values()].find((n) => n.url.endsWith("/two"))!;
+    expect(two.parentId).toBe(one.id);
+    expect(two.edgeType).toBe("other");
   });
 });
 
@@ -815,6 +819,63 @@ describe("root creation policy", () => {
     expect(clicked.edgeType).toBe("user_interaction");
   });
 
+  it("keeps one tree per target across repeated navigations", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (let i = 0; i < 4; i += 1) {
+      for (const a of assembler.handleRequestWillBeSent(
+        docRequest({
+          requestId: `nav-${i}`,
+          loaderId: `L${i}`,
+          timestamp: i + 1,
+          request: {
+            url: `https://example.com/page-${i}`,
+            method: "GET",
+            headers: {},
+          },
+        }),
+      )) {
+        integrateNode(state, a.node);
+      }
+    }
+
+    expect(state.trees.size).toBe(1);
+    expect(state.nodes.size).toBe(4);
+  });
+
+  it("roots a new tree again after the target's tree is deleted", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "first" }),
+    )) {
+      integrateNode(state, a.node);
+    }
+    const treeId = [...state.trees.keys()][0]!;
+    expect(deleteTree(state, treeId)).toBe(true);
+
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({
+        requestId: "second",
+        loaderId: "L2",
+        timestamp: 5,
+        request: {
+          url: "https://example.com/again",
+          method: "GET",
+          headers: {},
+        },
+      }),
+    )) {
+      integrateNode(state, a.node);
+    }
+
+    expect(state.trees.size).toBe(1);
+  });
+
   it("drops script navigations with no known page document", () => {
     const assembler = new RrAssembler("T1");
     const state = createTreeState();
@@ -913,9 +974,11 @@ describe("deleteTree / clearTrees", () => {
   it("removes one tree and clearTrees empties the forest", () => {
     resetAssemblerSeq();
     resetTreeSeq();
-    const assembler = new RrAssembler("T1");
+    // One tree per target, so two tabs are needed for two trees.
+    const tab1 = new RrAssembler("T1");
+    const tab2 = new RrAssembler("T2");
     const state = createTreeState();
-    for (const a of assembler.handleRequestWillBeSent({
+    for (const a of tab1.handleRequestWillBeSent({
       requestId: "d1",
       loaderId: "L1",
       frameId: "F1",
@@ -926,7 +989,7 @@ describe("deleteTree / clearTrees", () => {
     })) {
       integrateNode(state, a.node);
     }
-    for (const a of assembler.handleRequestWillBeSent({
+    for (const a of tab2.handleRequestWillBeSent({
       requestId: "d2",
       loaderId: "L2",
       frameId: "F2",

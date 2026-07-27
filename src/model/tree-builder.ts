@@ -348,11 +348,8 @@ function resolveParent(
     }
     // Prior hop was pruned: a redirect hop must never start its own tree.
     if (isDocument(node)) {
-      const fallbackDoc =
-        (node.frameId && state.frameToDocument.get(node.frameId)) ||
-        (node.loaderId && state.loaderToDocument.get(node.loaderId)) ||
-        findActiveDocumentForTarget(state, node.targetId);
-      if (fallbackDoc && fallbackDoc !== node.id) {
+      const fallbackDoc = findAttachableDocument(state, node);
+      if (fallbackDoc) {
         return { parentId: fallbackDoc, edgeType: "redirect", newRoot: false };
       }
       return { newRoot: false, edgeType: "redirect", drop: true };
@@ -367,16 +364,13 @@ function resolveParent(
     }
 
     const gesture = findRecentGesture(state, node, now);
-    const parentDoc =
-      (node.frameId && state.frameToDocument.get(node.frameId)) ||
-      (node.loaderId && state.loaderToDocument.get(node.loaderId)) ||
-      findActiveDocumentForTarget(state, node.targetId);
+    const parentDoc = findAttachableDocument(state, node);
 
     // Prefer recent user gesture over initiator classification (click on <a>, etc.).
     // Consume after first Document so one click does not tag every iframe Document.
     if (gesture) {
       consumeGesture(state, gesture);
-      if (parentDoc && parentDoc !== node.id) {
+      if (parentDoc) {
         return {
           parentId: parentDoc,
           edgeType: "user_interaction",
@@ -388,25 +382,28 @@ function resolveParent(
     }
 
     if (initiatorType === "script") {
-      if (parentDoc && parentDoc !== node.id) {
+      if (parentDoc) {
         return { parentId: parentDoc, edgeType: "script_nav", newRoot: false };
       }
       return { newRoot: false, edgeType: "script_nav", drop: true };
     }
 
-    // Browser-initiated top-level navigation: address bar, bookmark, restore.
-    if (isTopLevelDocument(state, node)) {
-      return { newRoot: true, edgeType: "other" };
-    }
-
-    // Subframe document: child of its embedder, never a root.
-    if (parentDoc && parentDoc !== node.id) {
+    // One tree per target: an existing document in this tab always wins over
+    // rooting a second tree, even for address-bar navigations.
+    if (parentDoc) {
       return {
         parentId: parentDoc,
         edgeType: mapInitiatorToEdge(initiatorType),
         newRoot: false,
       };
     }
+
+    // First browser-initiated top-level navigation for this target.
+    if (isTopLevelDocument(state, node)) {
+      return { newRoot: true, edgeType: "other" };
+    }
+
+    // Subframe document with no known embedder: never a root.
     return {
       newRoot: false,
       edgeType: mapInitiatorToEdge(initiatorType),
@@ -490,6 +487,26 @@ function findLatestDocumentForFrame(
     if (!best || n.createdAt > best.createdAt) best = n;
   }
   return best?.id ?? state.frameToDocument.get(frameId);
+}
+
+/**
+ * Existing document to hang a navigation on: own frame, own load, then the
+ * target's active tree. A target keeps a single tree, so this also answers
+ * "does this tab already have a tree?".
+ */
+function findAttachableDocument(
+  state: TreeState,
+  node: RrNode,
+): string | undefined {
+  const candidates = [
+    node.frameId ? state.frameToDocument.get(node.frameId) : undefined,
+    node.loaderId ? state.loaderToDocument.get(node.loaderId) : undefined,
+    findActiveDocumentForTarget(state, node.targetId),
+  ];
+  for (const id of candidates) {
+    if (id && id !== node.id && state.nodes.has(id)) return id;
+  }
+  return undefined;
 }
 
 function findActiveDocumentForTarget(

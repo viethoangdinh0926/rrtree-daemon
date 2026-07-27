@@ -31,6 +31,7 @@ sources:
 | `pruneEmptyRootsForUrl` | Drop empty duplicate roots |
 | `setMainFrame` | Record a target's top-level frame so only top-level navigations may root a tree |
 | `findRedirectingDocument` | Link a restarted navigation to the recent 3xx Document whose `Location` points at it |
+| `findAttachableDocument` | Frame → loader → target-tree lookup; a hit means the tab already has a tree, so no second root |
 
 ## Indexes (`TreeState`)
 
@@ -39,7 +40,7 @@ sources:
 
 ## Tests
 
-Covered by [`src/model/tree-builder.test.ts`](../../src/model/tree-builder.test.ts): redirects, assets+fetch, script_nav, user_interaction, root dedupe, gesture consume, subresource parenting under click nav, and the root creation policy (address-bar root, first-gesture root, subframe/script/orphan nodes never rooting).
+Covered by [`src/model/tree-builder.test.ts`](../../src/model/tree-builder.test.ts): redirects, assets+fetch, script_nav, user_interaction, root dedupe, gesture consume, subresource parenting under click nav, and the root creation policy (address-bar root, first-gesture root, subframe/script/orphan nodes never rooting, one tree per target across repeated navigations, re-rooting only after `deleteTree`).
 
 ## Related
 

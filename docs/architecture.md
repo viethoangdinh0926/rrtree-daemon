@@ -23,11 +23,12 @@ Static UI            — live expandable tree; scanning vs connected status
 ## Causality rules
 
 1. **Redirect**: same CDP `requestId` with `redirectResponse` → finish previous hop, new hop child with `edgeType=redirect`. Restarted navigations (cross-process redirects arrive with a **new** `requestId`) are matched to a recent 3xx Document whose `Location` resolves to the new URL, so a redirect **never** starts a new tree.
-2. **Document root** (only two cases): a **top-level frame** Document with browser-initiated initiator `other` and no recent in-page gesture (address bar / bookmark / reload / restore), **or** the first gesture-attributed Document when the page has no root node yet.
+2. **Document root**: **one tree per target** — if the tab already has an attachable document (frame doc, loader doc, or its active tree), the navigation is attached as a child (`other` for address-bar navigations) instead of rooting. A root is only created for a target with no tree yet, and then only for a **top-level frame** browser-initiated Document with no recent in-page gesture (address bar / bookmark / reload / restore), or the first gesture-attributed Document.
 3. **script_nav**: Document with initiator `script` → child of active document in frame/target; dropped when no document is known.
 4. **user_interaction**: Document with recent click/keydown (≈2s) and non-script initiator → child of active document when one exists.
 5. **Subresources**: prefer `loaderId` → document, else same-load `initiator.requestId`, else `frameId` → document, else active document for the target.
 6. **No stray roots**: subframe Documents, script navigations, and subresources that cannot be attached are dropped instead of creating a tree.
+7. **Re-rooting**: a target can root again only after its tree is removed via `deleteTree` / `clearTrees`, which also clear the frame/loader/target indexes.
 
 Top-level frames are learned from `Page.getFrameTree` on attach and `Page.frameNavigated` (frames without `parentId`), stored in `TreeState.mainFrameByTarget`.
 

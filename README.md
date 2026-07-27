@@ -2,10 +2,10 @@
 
 Linux daemon that attaches to **Google Chrome / Chromium** over the **Chrome DevTools Protocol (CDP)** and builds **live request–response causality trees**.
 
-A tree root is created **only** when either:
+**One tree per tab.** While a tab already has a tree, every further navigation is attached inside it — a second root is never created for the same target. A tab roots a new tree only when it has none yet (or after its tree was deleted), and then only for:
 
-- the user types an address in a tab's address bar and hits Enter (top-level, browser-initiated navigation with no in-page gesture — bookmarks, reload, and session restore look the same to CDP), or
-- the user interacts with a page component (click / Enter) **and** that page has no root node yet.
+- an address typed in the tab's address bar + Enter (top-level, browser-initiated navigation with no in-page gesture — bookmarks, reload, and session restore look the same to CDP), or
+- a user interaction with a page component (click / Enter) when that page has no root node yet.
 
 **Redirects never start a new tree** — the whole hop chain stays in the tree of the navigation that triggered it, including cross-process redirects that Chrome reports as a brand new request (matched via the previous hop's 3xx `Location`).
 
