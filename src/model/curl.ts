@@ -22,7 +22,9 @@ function headerEntries(
   headers: Record<string, string> | undefined,
 ): Array<[string, string]> {
   if (!headers) return [];
-  const out: Array<[string, string]> = [];
+  // Deduplicate headers by lowercase name (HTTP headers are case-insensitive).
+  // Keep the last occurrence for each header name.
+  const deduped = new Map<string, [string, string]>();
   for (const [rawName, value] of Object.entries(headers)) {
     if (value == null || value === "") continue;
     const name = rawName.toLowerCase();
@@ -38,8 +40,9 @@ function headerEntries(
             : name === "accept"
               ? "Accept"
               : rawName;
-    out.push([display, value]);
+    deduped.set(name, [display, value]);
   }
+  const out = Array.from(deduped.values());
   // Stable order for diffs / UX.
   out.sort((a, b) => a[0].localeCompare(b[0]));
   return out;

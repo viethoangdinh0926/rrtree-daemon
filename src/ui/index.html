@@ -555,22 +555,26 @@
         const parts = ["curl"];
         if (method !== "GET") parts.push("-X", method);
 
-        const headers = Object.entries(node.requestHeaders || {})
-          .filter(([name, value]) => value && CRUCIAL_HEADERS.has(name.toLowerCase()))
-          .map(([name, value]) => {
-            const lower = name.toLowerCase();
-            const display =
-              lower === "content-type"
-                ? "Content-Type"
-                : lower === "authorization"
-                  ? "Authorization"
-                  : lower === "cookie"
-                    ? "Cookie"
-                    : lower === "accept"
-                      ? "Accept"
-                      : name;
-            return [display, value];
-          })
+        // Deduplicate headers by lowercase name (HTTP headers are case-insensitive).
+        // Keep the last occurrence for each header name.
+        const deduped = new Map();
+        for (const [name, value] of Object.entries(node.requestHeaders || {})) {
+          if (!value) continue;
+          const lower = name.toLowerCase();
+          if (!CRUCIAL_HEADERS.has(lower)) continue;
+          const display =
+            lower === "content-type"
+              ? "Content-Type"
+              : lower === "authorization"
+                ? "Authorization"
+                : lower === "cookie"
+                  ? "Cookie"
+                  : lower === "accept"
+                    ? "Accept"
+                    : name;
+          deduped.set(lower, [display, value]);
+        }
+        const headers = Array.from(deduped.values())
           .sort((a, b) => a[0].localeCompare(b[0]));
 
         for (const [name, value] of headers) {

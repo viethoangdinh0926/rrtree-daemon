@@ -37,6 +37,23 @@ describe("nodeToCurl", () => {
     );
   });
 
+  it("deduplicates case-insensitive headers", () => {
+    const cmd = nodeToCurl({
+      url: "https://example.com/api",
+      method: "GET",
+      requestHeaders: {
+        "Authorization": "Bearer token1",
+        "authorization": "Bearer token2",
+        "CONTENT-TYPE": "application/json",
+        "content-type": "text/plain",
+      },
+    });
+    // Should keep the last occurrence of each header
+    expect(cmd).toBe(
+      "curl -H 'Authorization: Bearer token2' -H 'Content-Type: text/plain' 'https://example.com/api'",
+    );
+  });
+
   it("shell-escapes single quotes in URL and body", () => {
     const cmd = nodeToCurl({
       url: "https://example.com/a'b",
