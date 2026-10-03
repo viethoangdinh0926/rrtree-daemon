@@ -251,7 +251,7 @@
         font-size: 0.75rem;
         max-height: 50vh;
         white-space: pre-wrap;
-        word-break: break-word;
+        overflow-wrap: break-word;
       }
       dl {
         display: grid;
@@ -299,11 +299,137 @@
       .filter-option span {
         text-transform: capitalize;
       }
+      .capture-toggle {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.85rem;
+      }
+      .capture-toggle input {
+        cursor: pointer;
+        width: 1rem;
+        height: 1rem;
+      }
+      .capture-toggle label {
+        cursor: pointer;
+        user-select: none;
+      }
+      .context-menu {
+        position: fixed;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.25rem;
+        min-width: 150px;
+        z-index: 1000;
+        display: none;
+      }
+      .context-menu button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        border: none;
+        color: var(--text);
+        padding: 0.4rem 0.6rem;
+        font: inherit;
+        font-size: 0.85rem;
+        cursor: pointer;
+        border-radius: 4px;
+      }
+      .context-menu button:hover {
+        background: var(--accent);
+        color: var(--bg);
+      }
+      .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+      }
+      .modal {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1.25rem;
+        max-width: 800px;
+        max-height: 80vh;
+        width: 90%;
+        display: flex;
+        flex-direction: column;
+      }
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+      }
+      .modal-title {
+        font-size: 1rem;
+        font-weight: 600;
+      }
+      .modal-close {
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        font-size: 1.5rem;
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+      }
+      .modal-close:hover {
+        color: var(--text);
+      }
+      .modal-body {
+        flex: 1;
+        overflow: auto;
+        margin-bottom: 1rem;
+      }
+      .modal-body pre {
+        margin: 0;
+        font-size: 0.75rem;
+      }
+      .modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+      }
+      .modal-footer button {
+        font: inherit;
+        font-size: 0.85rem;
+        padding: 0.4rem 0.8rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        cursor: pointer;
+      }
+      .modal-footer button:hover {
+        border-color: var(--accent);
+      }
+      .modal-footer button.primary {
+        background: var(--accent);
+        color: var(--bg);
+        border-color: var(--accent);
+      }
+      .modal-footer button.primary:hover {
+        background: #2b8bd6;
+      }
     </style>
   </head>
   <body>
     <header>
       <h1>rrtree</h1>
+      <div class="capture-toggle">
+        <input type="checkbox" id="capture-toggle" checked>
+        <label for="capture-toggle">Capture requests</label>
+      </div>
       <span id="status" class="status">connecting…</span>
     </header>
     <main>
@@ -312,6 +438,9 @@
         <div class="toolbar">
           <button type="button" id="btn-delete-selected" class="danger" disabled>
             Delete selected
+          </button>
+          <button type="button" id="btn-reset-tree" disabled>
+            Reset tree
           </button>
           <button type="button" id="btn-clear-all" class="danger">
             Clear all
@@ -361,6 +490,27 @@
         <div id="detail"><p class="meta">Select a node</p></div>
       </article>
     </main>
+
+    <div id="context-menu" class="context-menu">
+      <button type="button" id="ctx-reroot">Re-root tree here</button>
+      <button type="button" id="ctx-export-json">Export tree as JSON</button>
+    </div>
+
+    <div id="json-modal" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <h3 class="modal-title">Subtree JSON</h3>
+          <button type="button" class="modal-close" id="modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <pre id="json-content"></pre>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="modal-copy" class="primary">Copy to clipboard</button>
+          <button type="button" id="modal-cancel">Close</button>
+        </div>
+      </div>
+    </div>
     <script>
       const state = {
         trees: [],
@@ -369,6 +519,7 @@
         selectedNodeId: null,
         collapsed: new Set(),
         edgeTypeFilters: new Set(["redirect", "parser", "script", "script_nav", "user_interaction", "preload", "other"]),
+        contextMenuNodeId: null,
       };
 
       const el = {
@@ -377,8 +528,18 @@
         treeView: document.getElementById("tree-view"),
         detail: document.getElementById("detail"),
         btnDeleteSelected: document.getElementById("btn-delete-selected"),
+        btnResetTree: document.getElementById("btn-reset-tree"),
         btnClearAll: document.getElementById("btn-clear-all"),
         edgeTypeFilters: document.getElementById("edge-type-filters"),
+        captureToggle: document.getElementById("capture-toggle"),
+        contextMenu: document.getElementById("context-menu"),
+        ctxReroot: document.getElementById("ctx-reroot"),
+        ctxExportJson: document.getElementById("ctx-export-json"),
+        jsonModal: document.getElementById("json-modal"),
+        jsonContent: document.getElementById("json-content"),
+        modalClose: document.getElementById("modal-close"),
+        modalCopy: document.getElementById("modal-copy"),
+        modalCancel: document.getElementById("modal-cancel"),
       };
 
       async function refreshTrees() {
@@ -386,12 +547,12 @@
         const data = await res.json();
         state.trees = data.trees || [];
         // Drop cached nodes for trees that no longer exist.
-        for (const id of [...state.nodesByTree.keys()]) {
-          if (!state.trees.find((t) => t.id === id)) state.nodesByTree.delete(id);
+        for (const id of state.nodesByTree.keys()) {
+          if (!state.trees.some((t) => t.id === id)) state.nodesByTree.delete(id);
         }
         if (
           state.selectedTreeId &&
-          !state.trees.find((t) => t.id === state.selectedTreeId)
+          !state.trees.some((t) => t.id === state.selectedTreeId)
         ) {
           state.selectedTreeId = null;
           state.selectedNodeId = null;
@@ -421,6 +582,13 @@
         const map = new Map();
         for (const n of data.nodes || []) map.set(n.id, n);
         state.nodesByTree.set(id, map);
+        // Update tree metadata if present
+        if (data.tree) {
+          const existing = state.trees.find((t) => t.id === id);
+          if (existing) {
+            Object.assign(existing, data.tree);
+          }
+        }
         renderTree();
       }
 
@@ -484,18 +652,24 @@
         if (!treeId || !node) return;
         if (!state.nodesByTree.has(treeId)) state.nodesByTree.set(treeId, new Map());
         state.nodesByTree.get(treeId).set(node.id, node);
-        if (!state.trees.find((t) => t.id === treeId)) {
+        if (!state.trees.some((t) => t.id === treeId)) {
           state.trees.push({
             id: treeId,
             rootId: node.parentId ? undefined : node.id,
+            originalRootId: node.parentId ? undefined : node.id,
             updatedAt: node.updatedAt,
             createdAt: node.createdAt,
             targetId: node.targetId,
           });
         } else {
           const t = state.trees.find((t) => t.id === treeId);
-          t.updatedAt = node.updatedAt;
-          if (!node.parentId) t.rootId = node.id;
+          if (t) {
+            t.updatedAt = node.updatedAt;
+            if (!node.parentId) {
+              t.rootId = node.id;
+              if (!t.originalRootId) t.originalRootId = node.id;
+            }
+          }
         }
         if (state.selectedTreeId === treeId) {
           renderTreeList();
@@ -563,6 +737,10 @@
             renderTree();
             renderDetail(nodes.get(nid));
           });
+          n.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            showContextMenu(e.clientX, e.clientY, n.dataset.id);
+          });
         });
         el.treeView.querySelectorAll(".toggle").forEach((t) => {
           t.addEventListener("click", (e) => {
@@ -573,6 +751,10 @@
             renderTree();
           });
         });
+
+        // Update reset button state
+        const canReset = tree.originalRootId && tree.rootId !== tree.originalRootId;
+        el.btnResetTree.disabled = !canReset;
       }
 
       function isNodeVisible(node, depth) {
@@ -589,22 +771,36 @@
         const hasKids = visibleKids.length > 0;
         const collapsed = state.collapsed.has(node.id);
         const selected = node.id === state.selectedNodeId ? "selected" : "";
-        const edge = node.edgeType
-          ? `<span class="edge ${node.edgeType}">${node.edgeType}</span>`
-          : depth === 0
-            ? `<span class="edge other">root</span>`
-            : "";
-        const status =
-          node.status != null
-            ? node.status
-            : node.failed
-              ? "ERR"
-              : node.hasResponse
-                ? "…"
-                : "→";
+        
+        let edge;
+        if (node.edgeType) {
+          edge = `<span class="edge ${node.edgeType}">${node.edgeType}</span>`;
+        } else if (depth === 0) {
+          edge = `<span class="edge other">root</span>`;
+        } else {
+          edge = "";
+        }
+        
+        let status;
+        if (node.status != null) {
+          status = node.status;
+        } else if (node.failed) {
+          status = "ERR";
+        } else if (node.hasResponse) {
+          status = "…";
+        } else {
+          status = "→";
+        }
+        
+        const toggleHtml = hasKids 
+          ? `<span class="toggle" data-id="${node.id}">${collapsed ? "▶" : "▼"}</span>`
+          : `<span class="toggle"> </span>`;
+        
+        const mimeTypeHtml = node.mimeType ? " · " + escapeHtml(node.mimeType) : "";
+        
         let html = `<div class="node ${selected}" data-id="${node.id}">
-          <div>${hasKids ? `<span class="toggle" data-id="${node.id}">${collapsed ? "▶" : "▼"}</span>` : `<span class="toggle"> </span>`}${edge}<span class="url">${escapeHtml(node.method)} ${escapeHtml(shortUrl(node.url))}</span></div>
-          <div class="meta">${escapeHtml(String(node.resourceType))} · ${status}${node.mimeType ? " · " + escapeHtml(node.mimeType) : ""}</div>
+          <div>${toggleHtml}${edge}<span class="url">${escapeHtml(node.method)} ${escapeHtml(shortUrl(node.url))}</span></div>
+          <div class="meta">${escapeHtml(String(node.resourceType))} · ${status}${mimeTypeHtml}</div>
         </div>`;
         if (hasKids && !collapsed) {
           html += `<div class="children">${visibleKids.map((k) => renderNodeHtml(k, nodes, depth + 1)).join("")}</div>`;
@@ -625,7 +821,8 @@
       ]);
 
       function shellSingleQuote(value) {
-        return "'" + String(value).replace(/'/g, `'\\''`) + "'";
+        const quotePattern = String.raw`'\\''`;
+        return "'" + String(value).replaceAll("'", quotePattern) + "'";
       }
 
       function nodeToCurl(node) {
@@ -640,16 +837,19 @@
           if (!value) continue;
           const lower = name.toLowerCase();
           if (!CRUCIAL_HEADERS.has(lower)) continue;
-          const display =
-            lower === "content-type"
-              ? "Content-Type"
-              : lower === "authorization"
-                ? "Authorization"
-                : lower === "cookie"
-                  ? "Cookie"
-                  : lower === "accept"
-                    ? "Accept"
-                    : name;
+          
+          let display;
+          if (lower === "content-type") {
+            display = "Content-Type";
+          } else if (lower === "authorization") {
+            display = "Authorization";
+          } else if (lower === "cookie") {
+            display = "Cookie";
+          } else if (lower === "accept") {
+            display = "Accept";
+          } else {
+            display = name;
+          }
           deduped.set(lower, [display, value]);
         }
         const headers = Array.from(deduped.values())
@@ -734,11 +934,10 @@
           return escapeHtml(body.text.slice(0, 16000) + note);
         }
         if (body.base64) {
+          const truncatedNote = body.truncated ? " truncated" : "";
+          const base64Preview = body.base64.slice(0, 2000);
           return escapeHtml(
-            `[base64 ${body.size ?? "?"} bytes]` +
-              (body.truncated ? " truncated" : "") +
-              "\n" +
-              body.base64.slice(0, 2000),
+            `[base64 ${body.size ?? "?"} bytes]${truncatedNote}\n${base64Preview}`,
           );
         }
         return `<span class="meta">—</span>`;
@@ -754,10 +953,10 @@
       }
       function escapeHtml(s) {
         return String(s)
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;");
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
       }
       function escapeAttr(s) {
         return escapeHtml(s).replace(/'/g, "&#39;");
@@ -767,11 +966,41 @@
         const cdp = health.cdp || {};
         const targets = health.attachedTargets?.length || 0;
         const trees = health.treeCount || 0;
+        const capturing = cdp.capturing !== false;
         if (cdp.state === "scanning") {
           const where = cdp.host && cdp.port ? `${cdp.host}:${cdp.port}` : "CDP";
           return `scanning for Chrome on ${where} · ${trees} trees`;
         }
-        return `connected · ${targets} targets · ${trees} trees`;
+        return `connected · ${targets} targets · ${trees} trees${capturing ? " · capturing" : " · paused"}`;
+      }
+
+      async function loadCapturingState() {
+        try {
+          const res = await fetch("/capturing");
+          const data = await res.json();
+          el.captureToggle.checked = data.capturing;
+        } catch (e) {
+          // Network errors are expected if API is unavailable; use default state
+          console.error("Failed to load capturing state:", e);
+        }
+      }
+
+      async function setCapturingState(enabled) {
+        try {
+          const res = await fetch("/capturing", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+          });
+          if (!res.ok) {
+            console.error("Failed to set capturing state");
+            el.captureToggle.checked = !enabled;
+          }
+        } catch (e) {
+          // Network errors are expected if API is unavailable; revert UI state
+          console.error("Failed to set capturing state:", e);
+          el.captureToggle.checked = !enabled;
+        }
       }
 
       async function refreshHealth() {
@@ -782,16 +1011,85 @@
           if (health.cdp?.state === "connected") el.status.classList.add("ok");
           else el.status.classList.remove("ok");
         } catch (e) {
+          // Network errors are expected if API is unavailable; show error state
           el.status.textContent = "API unreachable";
           el.status.classList.remove("ok");
         }
+      }
+
+      function showContextMenu(x, y, nodeId) {
+        state.contextMenuNodeId = nodeId;
+        el.contextMenu.style.display = "block";
+        el.contextMenu.style.left = `${x}px`;
+        el.contextMenu.style.top = `${y}px`;
+      }
+
+      function hideContextMenu() {
+        el.contextMenu.style.display = "none";
+        state.contextMenuNodeId = null;
+      }
+
+      function showModal(json) {
+        el.jsonContent.textContent = JSON.stringify(json, null, 2);
+        el.jsonModal.style.display = "flex";
+      }
+
+      function hideModal() {
+        el.jsonModal.style.display = "none";
+      }
+
+      async function rerootTreeAtNode(nodeId) {
+        if (!state.selectedTreeId || !nodeId) return;
+        const res = await fetch(`/trees/${encodeURIComponent(state.selectedTreeId)}/reroot`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ newRootId: nodeId }),
+        });
+        if (!res.ok) {
+          el.status.textContent = "Re-root failed";
+          return;
+        }
+        await loadTree(state.selectedTreeId);
+        renderTreeList();
+        renderTree();
+        el.status.textContent = `live · ${state.trees.length} trees`;
+      }
+
+      async function resetCurrentTree() {
+        if (!state.selectedTreeId) return;
+        const res = await fetch(`/trees/${encodeURIComponent(state.selectedTreeId)}/reset`, {
+          method: "POST",
+        });
+        if (!res.ok) {
+          el.status.textContent = "Reset failed";
+          return;
+        }
+        await loadTree(state.selectedTreeId);
+        renderTreeList();
+        renderTree();
+        el.status.textContent = `live · ${state.trees.length} trees`;
+      }
+
+      async function exportTreeJson() {
+        if (!state.contextMenuNodeId) return;
+        const filtersParam = Array.from(state.edgeTypeFilters).join(",");
+        const url = `/nodes/${encodeURIComponent(state.contextMenuNodeId)}/partial-json?filters=${encodeURIComponent(filtersParam)}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          el.status.textContent = "Export failed";
+          return;
+        }
+        const data = await res.json();
+        showModal(data.json);
       }
 
       async function connect() {
         try {
           await refreshHealth();
           await refreshTrees();
+          await loadCapturingState();
         } catch (e) {
+          // Network errors are expected if API is unavailable; show error state
           el.status.textContent = "API unreachable";
           el.status.classList.remove("ok");
         }
@@ -802,8 +1100,55 @@
         el.btnDeleteSelected.addEventListener("click", () => {
           if (state.selectedTreeId) void deleteTree(state.selectedTreeId);
         });
+        el.btnResetTree.addEventListener("click", () => {
+          void resetCurrentTree();
+        });
         el.btnClearAll.addEventListener("click", () => {
           void clearAllTrees();
+        });
+
+        el.captureToggle.addEventListener("change", () => {
+          void setCapturingState(el.captureToggle.checked);
+        });
+
+        // Context menu handlers
+        el.ctxReroot.addEventListener("click", () => {
+          void rerootTreeAtNode(state.contextMenuNodeId);
+          hideContextMenu();
+        });
+
+        el.ctxExportJson.addEventListener("click", () => {
+          void exportTreeJson();
+          hideContextMenu();
+        });
+
+        // Close context menu on click outside
+        document.addEventListener("click", (e) => {
+          if (!el.contextMenu.contains(e.target)) {
+            hideContextMenu();
+          }
+        });
+
+        // Modal handlers
+        el.modalClose.addEventListener("click", hideModal);
+        el.modalCancel.addEventListener("click", hideModal);
+        el.modalCopy.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(el.jsonContent.textContent);
+            el.modalCopy.textContent = "Copied!";
+            setTimeout(() => {
+              el.modalCopy.textContent = "Copy to clipboard";
+            }, 1500);
+          } catch {
+            el.modalCopy.textContent = "Copy failed";
+          }
+        });
+
+        // Close modal on overlay click
+        el.jsonModal.addEventListener("click", (e) => {
+          if (e.target === el.jsonModal) {
+            hideModal();
+          }
         });
 
         el.edgeTypeFilters.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {

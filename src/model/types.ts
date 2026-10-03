@@ -96,6 +96,7 @@ export interface RrNode {
 export interface Tree {
   id: string;
   rootId: string;
+  originalRootId?: string;
   targetId?: string;
   createdAt: number;
   updatedAt: number;

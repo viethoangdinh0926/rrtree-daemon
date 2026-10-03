@@ -18,6 +18,7 @@ export interface CdpStatus {
   host: string;
   port: number;
   attachedTargets: string[];
+  capturing: boolean;
   lastError?: string;
 }
 
@@ -73,6 +74,7 @@ export class CdpManager {
   private attached = new Map<string, AttachedTarget>();
   private running = false;
   private state: CdpConnectionState = "scanning";
+  private capturing = true;
   private lastError: string | undefined;
   private scanTimer: ReturnType<typeof setInterval> | null = null;
   private targetPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -99,9 +101,18 @@ export class CdpManager {
       host: this.host,
       port: this.port,
       attachedTargets: this.getAttachedTargetIds(),
+      capturing: this.capturing,
     };
     if (this.lastError) status.lastError = this.lastError;
     return status;
+  }
+
+  isCapturing(): boolean {
+    return this.capturing;
+  }
+
+  setCapturing(enabled: boolean): void {
+    this.capturing = enabled;
   }
 
   /**
@@ -390,6 +401,7 @@ export class CdpManager {
         this.onRequestWillBeSent(attached, params as CdpRequestWillBeSent);
       });
       client.Network.requestWillBeSentExtraInfo((params) => {
+        if (!this.capturing) return;
         const p = params as {
           requestId: string;
           headers?: Record<string, string>;
@@ -405,6 +417,7 @@ export class CdpManager {
         this.onResponseReceived(attached, params as CdpResponseReceived);
       });
       client.Network.responseReceivedExtraInfo((params) => {
+        if (!this.capturing) return;
         const p = params as {
           requestId: string;
           headers?: Record<string, string>;
@@ -423,6 +436,7 @@ export class CdpManager {
         this.onLoadingFailed(attached, params as CdpLoadingFailed);
       });
       client.Runtime.consoleAPICalled((params) => {
+        if (!this.capturing) return;
         if (params.type !== "debug") return;
         const first = params.args?.[0]?.value;
         if (first !== "__rrtree_gesture__") return;
@@ -467,6 +481,7 @@ export class CdpManager {
     attached: AttachedTarget,
     params: CdpRequestWillBeSent,
   ): void {
+    if (!this.capturing) return;
     for (const ev of attached.assembler.handleRequestWillBeSent(params)) {
       this.store.ingest(ev.node);
     }
@@ -476,6 +491,7 @@ export class CdpManager {
     attached: AttachedTarget,
     params: CdpResponseReceived,
   ): void {
+    if (!this.capturing) return;
     for (const ev of attached.assembler.handleResponseReceived(params)) {
       this.store.ingest(ev.node);
     }
@@ -485,6 +501,7 @@ export class CdpManager {
     attached: AttachedTarget,
     params: CdpLoadingFinished,
   ): Promise<void> {
+    if (!this.capturing) return;
     const events = attached.assembler.handleLoadingFinished(params);
     for (const ev of events) {
       if (this.captureBodies && !ev.node.failed) {
@@ -573,6 +590,7 @@ export class CdpManager {
     attached: AttachedTarget,
     params: CdpLoadingFailed,
   ): void {
+    if (!this.capturing) return;
     for (const ev of attached.assembler.handleLoadingFailed(params)) {
       this.store.ingest(ev.node);
     }

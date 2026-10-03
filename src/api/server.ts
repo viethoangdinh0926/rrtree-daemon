@@ -54,6 +54,7 @@ export function createApp(opts: ApiOptions): Express {
         host: cdp.host,
         port: cdp.port,
         lastError: cdp.lastError,
+        capturing: cdp.capturing,
       },
       attachedTargets: cdp.attachedTargets,
       treeCount: opts.store.getTrees().length,
@@ -70,7 +71,7 @@ export function createApp(opts: ApiOptions): Express {
       res.status(404).json({ error: "tree not found" });
       return;
     }
-    res.json(snap);
+    res.json({ tree: snap.tree, nodes: snap.nodes });
   });
 
   app.delete("/trees/:id", (req, res) => {
@@ -118,6 +119,63 @@ export function createApp(opts: ApiOptions): Express {
     }
     const ok = await opts.cdp.attachTarget(targetId);
     res.json({ ok, attachedTargets: opts.cdp.getAttachedTargetIds() });
+  });
+
+  app.get("/capturing", (_req, res) => {
+    res.json({ capturing: opts.cdp.isCapturing() });
+  });
+
+  app.post("/capturing", (req, res) => {
+    const enabled = req.body?.enabled as boolean | undefined;
+    if (typeof enabled !== "boolean") {
+      res.status(400).json({ error: "enabled (boolean) required" });
+      return;
+    }
+    opts.cdp.setCapturing(enabled);
+    res.json({ capturing: enabled });
+  });
+
+  app.post("/trees/:id/reroot", (req, res) => {
+    const { newRootId } = req.body as { newRootId?: string };
+    if (!newRootId) {
+      res.status(400).json({ error: "newRootId required" });
+      return;
+    }
+    const ok = opts.store.rerootTree(req.params.id, newRootId);
+    if (!ok) {
+      res.status(404).json({ error: "tree or node not found" });
+      return;
+    }
+    res.json({ ok: true, treeId: req.params.id, newRootId });
+  });
+
+  app.post("/trees/:id/reset", (req, res) => {
+    const ok = opts.store.resetTree(req.params.id);
+    if (!ok) {
+      res.status(404).json({ error: "tree not found or no original root" });
+      return;
+    }
+    res.json({ ok: true, treeId: req.params.id });
+  });
+
+  app.get("/trees/:id/json", (req, res) => {
+    const json = opts.store.generateTreeJson(req.params.id);
+    if (!json) {
+      res.status(404).json({ error: "tree not found" });
+      return;
+    }
+    res.json({ json });
+  });
+
+  app.get("/nodes/:id/partial-json", (req, res) => {
+    const filtersParam = req.query.filters as string | undefined;
+    const edgeTypeFilters = filtersParam ? new Set(filtersParam.split(",")) : undefined;
+    const json = opts.store.generatePartialTreeJson(req.params.id, edgeTypeFilters);
+    if (!json) {
+      res.status(404).json({ error: "node not found" });
+      return;
+    }
+    res.json({ json });
   });
 
   app.get("/events", (req, res) => {

@@ -637,6 +637,7 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
     const tree: Tree = {
       id: treeId,
       rootId: node.id,
+      originalRootId: node.id,
       targetId: node.targetId,
       createdAt: node.createdAt,
       updatedAt: node.updatedAt,
@@ -799,4 +800,280 @@ export function clearTrees(state: TreeState): number {
 
 export function resetTreeSeq(): void {
   treeSeq = 0;
+}
+
+/**
+ * Re-root a tree at a specific node. The new root becomes the specified node,
+ * and only its descendants are kept in the tree view.
+ */
+export function rerootTree(state: TreeState, treeId: string, newRootId: string): boolean {
+  const tree = state.trees.get(treeId);
+  if (!tree) return false;
+
+  const newRoot = state.nodes.get(newRootId);
+  if (!newRoot || newRoot.treeId !== treeId) return false;
+
+  // Store the original root if this is the first re-rooting
+  if (!tree.originalRootId) {
+    tree.originalRootId = tree.rootId;
+  }
+
+  tree.rootId = newRootId;
+  tree.updatedAt = Date.now();
+  return true;
+}
+
+/**
+ * Reset a tree to its original root.
+ */
+export function resetTree(state: TreeState, treeId: string): boolean {
+  const tree = state.trees.get(treeId);
+  if (!tree) return false;
+
+  if (!tree.originalRootId) return false; // No original root to reset to
+
+  tree.rootId = tree.originalRootId;
+  tree.updatedAt = Date.now();
+  return true;
+}
+
+/**
+ * Generate a JSON tree representation starting from a node.
+ * Includes the node and all its descendants.
+ */
+export function generateTreeJson(
+  state: TreeState,
+  nodeId: string,
+): Record<string, unknown> | null {
+  const node = state.nodes.get(nodeId);
+  if (!node) return null;
+
+  const childrenJson = (node.children || [])
+    .map((childId) => generateTreeJson(state, childId))
+    .filter((child): child is Record<string, unknown> => child !== null);
+
+  return {
+    url: node.url,
+    method: node.method,
+    status: node.status,
+    requestHeaders: node.requestHeaders,
+    requestBody: node.requestBody,
+    responseHeaders: node.responseHeaders,
+    responseBody: node.responseBody,
+    children: childrenJson,
+  };
+}
+
+/**
+ * Generate a JSON tree representation from root to selected node,
+ * including only the direct path and siblings before the selected node at its level.
+ */
+export function generatePartialTreeJsonImpl(
+  state: TreeState,
+  selectedNodeId: string,
+  edgeTypeFilters?: Set<string>,
+): Record<string, unknown> | null {
+  const selectedNode = state.nodes.get(selectedNodeId);
+  if (!selectedNode) return null;
+
+  // Build path from selected node to root
+  const path: RrNode[] = [];
+  let current: RrNode | undefined = selectedNode;
+  while (current) {
+    path.unshift(current);
+    current = current.parentId ? state.nodes.get(current.parentId) : undefined;
+  }
+
+  if (path.length === 0) return null;
+
+  // Build filtered JSON from root down
+  return buildFilteredJson(state, path[0]!, path.slice(1), edgeTypeFilters);
+}
+
+function buildFilteredJson(
+  state: TreeState,
+  currentNode: RrNode,
+  remainingPath: RrNode[],
+  edgeTypeFilters?: Set<string>,
+): Record<string, unknown> {
+  // If only one node remaining in path, this is the parent of selected node
+  // Include siblings before the selected node at this level
+  if (remainingPath.length === 1) {
+    const selectedNode = remainingPath[0];
+    return generateNodeWithPriorSiblingsForChild(state, currentNode, selectedNode, edgeTypeFilters);
+  }
+
+  // If no remaining path, this is the selected node itself - stop here (no children)
+  if (remainingPath.length === 0) {
+    return generateNodeJson(state, currentNode);
+  }
+
+  const nextNode = remainingPath[0];
+  
+  // At ancestor levels, include siblings before the path node (without their children)
+  const childIndex = (currentNode.children || []).indexOf(nextNode.id);
+  const siblingIds = childIndex >= 0 
+    ? (currentNode.children || []).slice(0, childIndex + 1)
+    : [nextNode.id];
+  
+  const childrenJson: Record<string, unknown>[] = [];
+  
+  for (const siblingId of siblingIds) {
+    const siblingNode = state.nodes.get(siblingId);
+    if (siblingNode) {
+      // Apply edge type filter
+      if (edgeTypeFilters && siblingNode.edgeType && !edgeTypeFilters.has(siblingNode.edgeType)) {
+        continue;
+      }
+      
+      if (siblingId === nextNode.id) {
+        // Path node gets full recursion
+        childrenJson.push(buildFilteredJson(state, siblingNode, remainingPath.slice(1), edgeTypeFilters));
+      } else {
+        // Siblings before path node get no children
+        childrenJson.push(generateNodeJson(state, siblingNode));
+      }
+    }
+  }
+
+  return {
+    url: currentNode.url,
+    method: currentNode.method,
+    status: currentNode.status,
+    requestHeaders: currentNode.requestHeaders,
+    requestBody: currentNode.requestBody,
+    responseHeaders: currentNode.responseHeaders,
+    responseBody: currentNode.responseBody,
+    children: childrenJson,
+  };
+}
+
+function generateNodeWithPriorSiblingsForChild(
+  state: TreeState,
+  parentNode: RrNode,
+  selectedChild: RrNode,
+  edgeTypeFilters?: Set<string>,
+): Record<string, unknown> {
+  // Include siblings before the selected child and the selected child itself
+  const childIndex = (parentNode.children || []).indexOf(selectedChild.id);
+  const siblingIds = childIndex >= 0 
+    ? (parentNode.children || []).slice(0, childIndex + 1)
+    : [selectedChild.id];
+  
+  const childrenJson: Record<string, unknown>[] = [];
+  
+  for (const siblingId of siblingIds) {
+    const siblingNode = state.nodes.get(siblingId);
+    if (siblingNode) {
+      // Apply edge type filter to siblings as well
+      if (edgeTypeFilters && siblingNode.edgeType && !edgeTypeFilters.has(siblingNode.edgeType)) {
+        continue;
+      }
+      
+      // All siblings (including selected child) get no children
+      childrenJson.push(generateNodeJson(state, siblingNode));
+    }
+  }
+
+  return {
+    url: parentNode.url,
+    method: parentNode.method,
+    status: parentNode.status,
+    requestHeaders: parentNode.requestHeaders,
+    requestBody: parentNode.requestBody,
+    responseHeaders: parentNode.responseHeaders,
+    responseBody: parentNode.responseBody,
+    children: childrenJson,
+  };
+}
+
+function generateNodeWithPriorSiblings(
+  state: TreeState,
+  node: RrNode,
+  edgeTypeFilters?: Set<string>,
+): Record<string, unknown> {
+  // Get parent to find siblings
+  const parent = node.parentId ? state.nodes.get(node.parentId) : null;
+  
+  let childrenJson: Record<string, unknown>[] = [];
+  
+  if (parent) {
+    // Include siblings before this node and this node itself
+    const childIndex = (parent.children || []).indexOf(node.id);
+    const siblingIds = childIndex >= 0 
+      ? (parent.children || []).slice(0, childIndex + 1)
+      : [node.id];
+    
+    for (const siblingId of siblingIds) {
+      const siblingNode = state.nodes.get(siblingId);
+      if (siblingNode) {
+        // Apply edge type filter to siblings as well
+        if (edgeTypeFilters && siblingNode.edgeType && !edgeTypeFilters.has(siblingNode.edgeType)) {
+          continue;
+        }
+        childrenJson.push(generateFullNodeJson(state, siblingNode, edgeTypeFilters));
+      }
+    }
+  } else {
+    // Root node - include all its children (since root has no siblings)
+    childrenJson = (node.children || [])
+      .map((childId) => generateFullNodeJson(state, state.nodes.get(childId)!, edgeTypeFilters))
+      .filter((child): child is Record<string, unknown> => child !== null);
+  }
+
+  return {
+    url: node.url,
+    method: node.method,
+    status: node.status,
+    requestHeaders: node.requestHeaders,
+    requestBody: node.requestBody,
+    responseHeaders: node.responseHeaders,
+    responseBody: node.responseBody,
+    children: childrenJson,
+  };
+}
+
+function generateNodeJson(
+  state: TreeState,
+  node: RrNode,
+): Record<string, unknown> {
+  return {
+    url: node.url,
+    method: node.method,
+    status: node.status,
+    requestHeaders: node.requestHeaders,
+    requestBody: node.requestBody,
+    responseHeaders: node.responseHeaders,
+    responseBody: node.responseBody,
+    children: [],
+  };
+}
+
+function generateFullNodeJson(
+  state: TreeState,
+  node: RrNode,
+  edgeTypeFilters?: Set<string>,
+): Record<string, unknown> {
+  const childrenJson = (node.children || [])
+    .map((childId) => {
+      const childNode = state.nodes.get(childId);
+      if (!childNode) return null;
+      // Filter by edge type if filters are provided
+      if (edgeTypeFilters && childNode.edgeType && !edgeTypeFilters.has(childNode.edgeType)) {
+        return null;
+      }
+      return generateFullNodeJson(state, childNode, edgeTypeFilters);
+    })
+    .filter((child): child is Record<string, unknown> => child !== null);
+
+  return {
+    url: node.url,
+    method: node.method,
+    status: node.status,
+    requestHeaders: node.requestHeaders,
+    requestBody: node.requestBody,
+    responseHeaders: node.responseHeaders,
+    responseBody: node.responseBody,
+    children: childrenJson,
+  };
 }

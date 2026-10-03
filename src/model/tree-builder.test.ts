@@ -7,9 +7,13 @@ import {
   clearTrees,
   createTreeState,
   deleteTree,
+  generatePartialTreeJsonImpl,
+  generateTreeJson,
   integrateNode,
   recordGesture,
+  resetTree,
   resetTreeSeq,
+  rerootTree,
   setMainFrame,
 } from "./tree-builder.js";
 import type {
@@ -1043,5 +1047,240 @@ describe("RrAssembler redirect hop", () => {
     expect(second[1]!.node.url).toBe("https://b.example/");
     expect(second[1]!.node.edgeType).toBe("redirect");
     expect(second[1]!.node.parentId).toBe(second[0]!.node.id);
+  });
+});
+
+describe("Tree re-rooting", () => {
+  function docRequest(
+    overrides: Partial<CdpRequestWillBeSent> & { requestId: string },
+  ): CdpRequestWillBeSent {
+    return {
+      loaderId: "L1",
+      frameId: "MAIN",
+      request: { url: "https://example.com/page", method: "GET", headers: {} },
+      timestamp: 1,
+      initiator: { type: "other" },
+      type: "Document",
+      ...overrides,
+    } as CdpRequestWillBeSent;
+  }
+
+  it("re-roots a tree at a specific node", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    // Create a simple tree: root -> child -> grandchild
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "root" }),
+    )) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "child",
+      loaderId: "L1",
+      timestamp: 2,
+      request: { url: "https://example.com/child", method: "GET", headers: {} },
+      initiator: { type: "parser" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "grandchild",
+      loaderId: "L2",
+      timestamp: 3,
+      request: { url: "https://example.com/grandchild", method: "GET", headers: {} },
+      initiator: { type: "parser" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    const treeId = [...state.trees.keys()][0];
+    const tree = state.trees.get(treeId)!;
+    const originalRootId = tree.rootId;
+
+    // Find the child node
+    const child = [...state.nodes.values()].find((n) => n.url.includes("child"))!;
+    const grandchild = [...state.nodes.values()].find((n) => n.url.includes("grandchild"))!;
+
+    // Re-root at child
+    const ok = rerootTree(state, treeId, child.id);
+    expect(ok).toBe(true);
+    expect(tree.rootId).toBe(child.id);
+    expect(tree.originalRootId).toBe(originalRootId);
+
+    // Reset to original
+    const resetOk = resetTree(state, treeId);
+    expect(resetOk).toBe(true);
+    expect(tree.rootId).toBe(originalRootId);
+  });
+
+  it("generates JSON tree", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "root" }),
+    )) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "child",
+      loaderId: "L1",
+      timestamp: 2,
+      request: { url: "https://example.com/child", method: "GET", headers: {} },
+      initiator: { type: "parser" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    const treeId = [...state.trees.keys()][0];
+    const tree = state.trees.get(treeId)!;
+    const json = generateTreeJson(state, tree.rootId);
+
+    expect(json).not.toBeNull();
+    if (json) {
+      expect(json).toHaveProperty("url");
+      expect(json).toHaveProperty("method");
+      expect(json).toHaveProperty("status");
+      expect(json).toHaveProperty("requestHeaders");
+      expect(json).toHaveProperty("requestBody");
+      expect(json).toHaveProperty("responseHeaders");
+      expect(json).toHaveProperty("responseBody");
+      expect(json).toHaveProperty("children");
+      expect(Array.isArray(json.children)).toBe(true);
+    }
+  });
+
+  it("generates partial JSON tree with direct path and siblings before selected node", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    // Create root with 3 children
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "root" }),
+    )) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "child1",
+      loaderId: "L1",
+      timestamp: 2,
+      request: { url: "https://example.com/child1", method: "GET", headers: {} },
+      initiator: { type: "parser" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "child2",
+      loaderId: "L1",
+      timestamp: 3,
+      request: { url: "https://example.com/child2", method: "GET", headers: {} },
+      initiator: { type: "parser" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "child3",
+      loaderId: "L1",
+      timestamp: 4,
+      request: { url: "https://example.com/child3", method: "GET", headers: {} },
+      initiator: { type: "parser" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    // Select child2 - should include root with child1 and child2 (siblings before and including child2)
+    // Both child1 and child2 should have no children (JSON stops at selected node)
+    const child2 = [...state.nodes.values()].find((n) => n.url.includes("child2"))!;
+    const json = generatePartialTreeJsonImpl(state, child2.id);
+
+    expect(json).not.toBeNull();
+    if (json) {
+      expect(json).toHaveProperty("children");
+      const children = json.children as unknown[];
+      expect(Array.isArray(children)).toBe(true);
+      // Root should have 2 children (child1 and child2, but not child3)
+      expect(children).toHaveLength(2);
+      
+      // child1 should have no children (sibling before selected node)
+      const child1Json = children[0] as Record<string, unknown>;
+      const child1Children = child1Json.children as unknown[];
+      expect(Array.isArray(child1Children)).toBe(true);
+      expect(child1Children).toHaveLength(0);
+      
+      // child2 should have no children (selected node - JSON stops here)
+      const child2Json = children[1] as Record<string, unknown>;
+      const child2Children = child2Json.children as unknown[];
+      expect(Array.isArray(child2Children)).toBe(true);
+      expect(child2Children).toHaveLength(0);
+    }
+  });
+
+  it("respects edge type filters in partial JSON export", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    // Create root with 2 children
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "root" }),
+    )) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "child1",
+      loaderId: "L1",
+      timestamp: 2,
+      request: { url: "https://example.com/child1", method: "GET", headers: {} },
+      initiator: { type: "parser" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "child2",
+      loaderId: "L1",
+      timestamp: 3,
+      request: { url: "https://example.com/child2", method: "GET", headers: {} },
+      initiator: { type: "other" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    // Manually set edge types for testing
+    const nodes = [...state.nodes.values()];
+    const child1 = nodes.find((n) => n.url.includes("child1"))!;
+    const child2 = nodes.find((n) => n.url.includes("child2"))!;
+    child1.edgeType = "parser";
+    child2.edgeType = "other";
+
+    // Select child2 with filter that excludes "parser" edge type
+    const filters = new Set(["other", "user_interaction"]); // Exclude "parser"
+    const json = generatePartialTreeJsonImpl(state, child2.id, filters);
+
+    expect(json).not.toBeNull();
+    if (json) {
+      expect(json).toHaveProperty("children");
+      const children = json.children as unknown[];
+      expect(Array.isArray(children)).toBe(true);
+      // Root should have only child2 (child1 has "parser" edge type and should be filtered out)
+      expect(children).toHaveLength(1);
+      
+      // child2 should have no children (selected node - JSON stops here)
+      const child2Json = children[0] as Record<string, unknown>;
+      const child2Children = child2Json.children as unknown[];
+      expect(Array.isArray(child2Children)).toBe(true);
+      expect(child2Children).toHaveLength(0);
+    }
   });
 });

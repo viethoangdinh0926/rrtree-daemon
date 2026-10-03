@@ -3,10 +3,14 @@ import {
   clearTrees,
   createTreeState,
   deleteTree,
+  generatePartialTreeJsonImpl,
+  generateTreeJson,
   getTreeSnapshot,
   integrateNode,
   listTrees,
   recordGesture,
+  resetTree,
+  rerootTree,
   setMainFrame,
   type TreeState,
 } from "./tree-builder.js";
@@ -62,5 +66,41 @@ export class TreeStore extends EventEmitter {
     const patch: TreePatch = { op: "clear", ts: Date.now() };
     this.emit("patch", patch);
     return count;
+  }
+
+  rerootTree(treeId: string, newRootId: string): boolean {
+    const ok = rerootTree(this.state, treeId, newRootId);
+    if (ok) {
+      const patch: TreePatch = {
+        op: "upsert",
+        treeId,
+        ts: Date.now(),
+      };
+      this.emit("patch", patch);
+    }
+    return ok;
+  }
+
+  resetTree(treeId: string): boolean {
+    const ok = resetTree(this.state, treeId);
+    if (ok) {
+      const patch: TreePatch = {
+        op: "upsert",
+        treeId,
+        ts: Date.now(),
+      };
+      this.emit("patch", patch);
+    }
+    return ok;
+  }
+
+  generateTreeJson(treeId: string): Record<string, unknown> | null {
+    const tree = this.state.trees.get(treeId);
+    if (!tree) return null;
+    return generateTreeJson(this.state, tree.rootId);
+  }
+
+  generatePartialTreeJson(nodeId: string, edgeTypeFilters?: Set<string>): Record<string, unknown> | null {
+    return generatePartialTreeJsonImpl(this.state, nodeId, edgeTypeFilters);
   }
 }
