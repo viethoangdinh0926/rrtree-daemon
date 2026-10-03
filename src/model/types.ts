@@ -96,7 +96,8 @@ export interface RrNode {
 export interface Tree {
   id: string;
   rootId: string;
-  originalRootId?: string;
+  /** User-marked effective root for JSON export (only one at a time) */
+  effectiveRootId?: string;
   targetId?: string;
   createdAt: number;
   updatedAt: number;

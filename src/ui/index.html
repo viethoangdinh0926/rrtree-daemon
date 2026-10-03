@@ -518,7 +518,9 @@
         selectedTreeId: null,
         selectedNodeId: null,
         collapsed: new Set(),
-        edgeTypeFilters: new Set(["redirect", "parser", "script", "script_nav", "user_interaction", "preload", "other"]),
+        edgeTypeFilters: new Set(
+          JSON.parse(localStorage.getItem("edgeTypeFilters") || '["redirect", "parser", "script", "script_nav", "user_interaction", "preload", "other"]')
+        ),
         contextMenuNodeId: null,
       };
 
@@ -546,6 +548,8 @@
         const res = await fetch("/trees");
         const data = await res.json();
         state.trees = data.trees || [];
+        // Sort trees by createdAt to maintain consistent order
+        state.trees.sort((a, b) => a.createdAt - b.createdAt);
         // Drop cached nodes for trees that no longer exist.
         for (const id of state.nodesByTree.keys()) {
           if (!state.trees.some((t) => t.id === id)) state.nodesByTree.delete(id);
@@ -602,6 +606,8 @@
 
       function removeTreeLocal(treeId) {
         state.trees = state.trees.filter((t) => t.id !== treeId);
+        // Sort trees by createdAt to maintain consistent order
+        state.trees.sort((a, b) => a.createdAt - b.createdAt);
         state.nodesByTree.delete(treeId);
         if (state.selectedTreeId === treeId) {
           state.selectedTreeId = null;
@@ -661,6 +667,8 @@
             createdAt: node.createdAt,
             targetId: node.targetId,
           });
+          // Sort trees by createdAt to maintain consistent order
+          state.trees.sort((a, b) => a.createdAt - b.createdAt);
         } else {
           const t = state.trees.find((t) => t.id === treeId);
           if (t) {
@@ -753,7 +761,7 @@
         });
 
         // Update reset button state
-        const canReset = tree.originalRootId && tree.rootId !== tree.originalRootId;
+        const canReset = !!tree.effectiveRootId;
         el.btnResetTree.disabled = !canReset;
       }
 
@@ -1038,15 +1046,15 @@
         el.jsonModal.style.display = "none";
       }
 
-      async function rerootTreeAtNode(nodeId) {
+      async function setEffectiveRootAtNode(nodeId) {
         if (!state.selectedTreeId || !nodeId) return;
-        const res = await fetch(`/trees/${encodeURIComponent(state.selectedTreeId)}/reroot`, {
+        const res = await fetch(`/trees/${encodeURIComponent(state.selectedTreeId)}/effective-root`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ newRootId: nodeId }),
+          body: JSON.stringify({ effectiveRootId: nodeId }),
         });
         if (!res.ok) {
-          el.status.textContent = "Re-root failed";
+          el.status.textContent = "Set effective root failed";
           return;
         }
         await loadTree(state.selectedTreeId);
@@ -1055,18 +1063,22 @@
         el.status.textContent = `live · ${state.trees.length} trees`;
       }
 
-      async function resetCurrentTree() {
+      async function clearEffectiveRoot() {
         if (!state.selectedTreeId) return;
-        const res = await fetch(`/trees/${encodeURIComponent(state.selectedTreeId)}/reset`, {
-          method: "POST",
+        const res = await fetch(`/trees/${encodeURIComponent(state.selectedTreeId)}/effective-root`, {
+          method: "DELETE",
         });
         if (!res.ok) {
-          el.status.textContent = "Reset failed";
+          el.status.textContent = "Clear effective root failed";
           return;
         }
         await loadTree(state.selectedTreeId);
         renderTreeList();
         renderTree();
+        // Explicitly update button state
+        const tree = state.trees.find((t) => t.id === state.selectedTreeId);
+        const canReset = !!tree?.effectiveRootId;
+        el.btnResetTree.disabled = !canReset;
         el.status.textContent = `live · ${state.trees.length} trees`;
       }
 
@@ -1101,7 +1113,7 @@
           if (state.selectedTreeId) void deleteTree(state.selectedTreeId);
         });
         el.btnResetTree.addEventListener("click", () => {
-          void resetCurrentTree();
+          void clearEffectiveRoot();
         });
         el.btnClearAll.addEventListener("click", () => {
           void clearAllTrees();
@@ -1113,7 +1125,7 @@
 
         // Context menu handlers
         el.ctxReroot.addEventListener("click", () => {
-          void rerootTreeAtNode(state.contextMenuNodeId);
+          void setEffectiveRootAtNode(state.contextMenuNodeId);
           hideContextMenu();
         });
 
@@ -1152,12 +1164,15 @@
         });
 
         el.edgeTypeFilters.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
+          // Sync checkbox state with loaded filters
+          checkbox.checked = state.edgeTypeFilters.has(checkbox.value);
           checkbox.addEventListener("change", () => {
             if (checkbox.checked) {
               state.edgeTypeFilters.add(checkbox.value);
             } else {
               state.edgeTypeFilters.delete(checkbox.value);
             }
+            localStorage.setItem("edgeTypeFilters", JSON.stringify([...state.edgeTypeFilters]));
             renderTree();
           });
         });
@@ -1168,6 +1183,8 @@
             const data = JSON.parse(msg.data);
             if (data.op === "snapshot") {
               state.trees = data.trees || state.trees;
+              // Sort trees by createdAt to maintain consistent order
+              state.trees.sort((a, b) => a.createdAt - b.createdAt);
               renderTreeList();
               return;
             }

@@ -11,9 +11,9 @@ import {
   generateTreeJson,
   integrateNode,
   recordGesture,
-  resetTree,
   resetTreeSeq,
-  rerootTree,
+  setEffectiveRoot,
+  clearEffectiveRoot,
   setMainFrame,
 } from "./tree-builder.js";
 import type {
@@ -1050,7 +1050,7 @@ describe("RrAssembler redirect hop", () => {
   });
 });
 
-describe("Tree re-rooting", () => {
+describe("Tree effective root", () => {
   function docRequest(
     overrides: Partial<CdpRequestWillBeSent> & { requestId: string },
   ): CdpRequestWillBeSent {
@@ -1065,7 +1065,7 @@ describe("Tree re-rooting", () => {
     } as CdpRequestWillBeSent;
   }
 
-  it("re-roots a tree at a specific node", () => {
+  it("sets and clears effective root", () => {
     const assembler = new RrAssembler("T1");
     const state = createTreeState();
     setMainFrame(state, "T1", "MAIN");
@@ -1099,22 +1099,122 @@ describe("Tree re-rooting", () => {
 
     const treeId = [...state.trees.keys()][0];
     const tree = state.trees.get(treeId)!;
-    const originalRootId = tree.rootId;
 
-    // Find the child node
     const child = [...state.nodes.values()].find((n) => n.url.includes("child"))!;
-    const grandchild = [...state.nodes.values()].find((n) => n.url.includes("grandchild"))!;
 
-    // Re-root at child
-    const ok = rerootTree(state, treeId, child.id);
+    // Set effective root to child
+    const ok = setEffectiveRoot(state, treeId, child.id);
     expect(ok).toBe(true);
-    expect(tree.rootId).toBe(child.id);
-    expect(tree.originalRootId).toBe(originalRootId);
+    expect(tree.effectiveRootId).toBe(child.id);
 
-    // Reset to original
-    const resetOk = resetTree(state, treeId);
-    expect(resetOk).toBe(true);
-    expect(tree.rootId).toBe(originalRootId);
+    // Clear effective root
+    const clearOk = clearEffectiveRoot(state, treeId);
+    expect(clearOk).toBe(true);
+    expect(tree.effectiveRootId).toBeUndefined();
+  });
+
+  it("generates JSON from selected node with effective root in path", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    // Create a tree: root -> child
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "root" }),
+    )) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "child",
+      loaderId: "L1",
+      timestamp: 2,
+      request: { url: "https://example.com/child", method: "GET", headers: {} },
+      initiator: { type: "parser" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    const treeId = [...state.trees.keys()][0];
+    const tree = state.trees.get(treeId)!;
+
+    const root = [...state.nodes.values()].find((n) => n.url.includes("page"))!;
+    const child = [...state.nodes.values()].find((n) => n.url.includes("child"))!;
+
+    // Set effective root to child
+    const ok = setEffectiveRoot(state, treeId, child.id);
+    expect(ok).toBe(true);
+    expect(tree.effectiveRootId).toBe(child.id);
+
+    // Generate partial JSON from child
+    // Should start from child (effective root), not page (original root)
+    const json = generatePartialTreeJsonImpl(state, child.id);
+
+    expect(json).not.toBeNull();
+    if (json) {
+      // The JSON should start from child (effective root), not page (original root)
+      expect(json.url).toBe("https://example.com/child");
+      expect(json.url).not.toBe("https://example.com/page");
+    }
+
+    // Clear effective root
+    const clearOk = clearEffectiveRoot(state, treeId);
+    expect(clearOk).toBe(true);
+    expect(tree.effectiveRootId).toBeUndefined();
+  });
+
+  it("returns null when selected node is not under effective root", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    // Create a tree: root -> child -> grandchild
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "root" }),
+    )) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "child",
+      loaderId: "L1",
+      timestamp: 2,
+      request: { url: "https://example.com/child", method: "GET", headers: {} },
+      initiator: { type: "parser" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+    for (const a of assembler.handleRequestWillBeSent({
+      requestId: "grandchild",
+      loaderId: "L2",
+      timestamp: 3,
+      request: { url: "https://example.com/grandchild", method: "GET", headers: {} },
+      initiator: { type: "parser" },
+      type: "Script",
+    })) {
+      integrateNode(state, a.node);
+    }
+
+    const treeId = [...state.trees.keys()][0];
+    const tree = state.trees.get(treeId)!;
+
+    const root = [...state.nodes.values()].find((n) => n.url.includes("page"))!;
+    const child = [...state.nodes.values()].find((n) => n.url.includes("child"))!;
+
+    // Set effective root to child
+    const ok = setEffectiveRoot(state, treeId, child.id);
+    expect(ok).toBe(true);
+    expect(tree.effectiveRootId).toBe(child.id);
+
+    // Generate partial JSON from root
+    // Should return null because root is not under the effective root (child)
+    const json = generatePartialTreeJsonImpl(state, root.id);
+    expect(json).toBeNull();
+
+    // Clear effective root
+    const clearOk = clearEffectiveRoot(state, treeId);
+    expect(clearOk).toBe(true);
+    expect(tree.effectiveRootId).toBeUndefined();
   });
 
   it("generates JSON tree", () => {
@@ -1281,6 +1381,97 @@ describe("Tree re-rooting", () => {
       const child2Children = child2Json.children as unknown[];
       expect(Array.isArray(child2Children)).toBe(true);
       expect(child2Children).toHaveLength(0);
+    }
+  });
+
+  it("filters request and response headers to only crucial headers", () => {
+    const assembler = new RrAssembler("T1");
+    const state = createTreeState();
+    setMainFrame(state, "T1", "MAIN");
+
+    // Create a node with many headers including HTTP/2 pseudo-headers and informational headers
+    for (const a of assembler.handleRequestWillBeSent(
+      docRequest({ requestId: "root" }),
+    )) {
+      a.node.requestHeaders = {
+        ":method": "GET",
+        ":path": "/test",
+        ":scheme": "https",
+        ":authority": "example.com",
+        "user-agent": "Mozilla/5.0",
+        "accept": "text/html",
+        "content-type": "application/json",
+        "authorization": "Bearer token",
+        "cookie": "session=abc",
+        "referer": "https://example.com",
+        "origin": "https://example.com",
+        "host": "example.com",
+        "accept-encoding": "gzip, deflate",
+        "accept-language": "en-US",
+        "connection": "keep-alive",
+        "pragma": "no-cache",
+        "cache-control": "no-cache",
+      };
+      a.node.responseHeaders = {
+        "content-type": "application/json",
+        "content-length": "1234",
+        "date": "Mon, 01 Jan 2026 00:00:00 GMT",
+        "server": "nginx",
+        "set-cookie": "session=xyz",
+        "cache-control": "no-cache",
+        "expires": "0",
+        "etag": "abc123",
+        "last-modified": "Mon, 01 Jan 2026 00:00:00 GMT",
+        "x-custom-header": "custom-value",
+        "x-powered-by": "Express",
+        "x-request-id": "123",
+      };
+      integrateNode(state, a.node);
+    }
+
+    const treeId = [...state.trees.keys()][0];
+    const tree = state.trees.get(treeId)!;
+    const json = generateTreeJson(state, tree.rootId);
+
+    expect(json).not.toBeNull();
+    if (json) {
+      const requestHeaders = json.requestHeaders as Record<string, string>;
+      const responseHeaders = json.responseHeaders as Record<string, string>;
+
+      // Check that HTTP/2 pseudo-headers are excluded
+      expect(requestHeaders[":method"]).toBeUndefined();
+      expect(requestHeaders[":path"]).toBeUndefined();
+      expect(requestHeaders[":scheme"]).toBeUndefined();
+      expect(requestHeaders[":authority"]).toBeUndefined();
+
+      // Check that non-crucial informational headers are excluded
+      expect(requestHeaders["accept-encoding"]).toBeUndefined();
+      expect(requestHeaders["accept-language"]).toBeUndefined();
+      expect(requestHeaders["connection"]).toBeUndefined();
+      expect(requestHeaders["pragma"]).toBeUndefined();
+      expect(responseHeaders["date"]).toBeUndefined();
+      expect(responseHeaders["server"]).toBeUndefined();
+      expect(responseHeaders["x-custom-header"]).toBeUndefined();
+      expect(responseHeaders["x-powered-by"]).toBeUndefined();
+      expect(responseHeaders["x-request-id"]).toBeUndefined();
+
+      // Check that crucial request headers are included
+      expect(requestHeaders["content-type"]).toBeDefined();
+      expect(requestHeaders["authorization"]).toBeDefined();
+      expect(requestHeaders["cookie"]).toBeDefined();
+      expect(requestHeaders["accept"]).toBeDefined();
+      expect(requestHeaders["user-agent"]).toBeDefined();
+      expect(requestHeaders["referer"]).toBeDefined();
+      expect(requestHeaders["origin"]).toBeDefined();
+      expect(requestHeaders["host"]).toBeDefined();
+
+      // Check that crucial response headers are included
+      expect(responseHeaders["content-type"]).toBeDefined();
+      expect(responseHeaders["content-length"]).toBeDefined();
+      expect(responseHeaders["set-cookie"]).toBeDefined();
+      expect(responseHeaders["cache-control"]).toBeDefined();
+      expect(responseHeaders["etag"]).toBeDefined();
+      expect(responseHeaders["last-modified"]).toBeDefined();
     }
   });
 });

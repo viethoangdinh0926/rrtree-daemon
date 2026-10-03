@@ -135,24 +135,24 @@ export function createApp(opts: ApiOptions): Express {
     res.json({ capturing: enabled });
   });
 
-  app.post("/trees/:id/reroot", (req, res) => {
-    const { newRootId } = req.body as { newRootId?: string };
-    if (!newRootId) {
-      res.status(400).json({ error: "newRootId required" });
+  app.post("/trees/:id/effective-root", (req, res) => {
+    const { effectiveRootId } = req.body as { effectiveRootId?: string };
+    if (!effectiveRootId) {
+      res.status(400).json({ error: "effectiveRootId required" });
       return;
     }
-    const ok = opts.store.rerootTree(req.params.id, newRootId);
+    const ok = opts.store.setEffectiveRoot(req.params.id, effectiveRootId);
     if (!ok) {
       res.status(404).json({ error: "tree or node not found" });
       return;
     }
-    res.json({ ok: true, treeId: req.params.id, newRootId });
+    res.json({ ok: true, treeId: req.params.id, effectiveRootId });
   });
 
-  app.post("/trees/:id/reset", (req, res) => {
-    const ok = opts.store.resetTree(req.params.id);
+  app.delete("/trees/:id/effective-root", (req, res) => {
+    const ok = opts.store.clearEffectiveRoot(req.params.id);
     if (!ok) {
-      res.status(404).json({ error: "tree not found or no original root" });
+      res.status(404).json({ error: "tree not found" });
       return;
     }
     res.json({ ok: true, treeId: req.params.id });

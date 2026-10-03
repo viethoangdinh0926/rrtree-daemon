@@ -17,7 +17,7 @@ const REDIRECT_LINK_MS = 15_000;
 export interface TreeState {
   nodes: Map<string, RrNode>;
   trees: Map<string, Tree>;
-  /** CDP requestId → node id (current hop). */
+  /** CDP requestId → node id (current hop). Scoped by targetId to avoid conflicts across tabs. */
   requestIdToNodeId: Map<string, string>;
   /** loaderId → Document node id for that load. */
   loaderToDocument: Map<string, string>;
@@ -261,8 +261,8 @@ function mergeIntoCanonical(
     bodyRef: incoming.bodyRef ?? canonical.bodyRef,
   };
   state.nodes.set(merged.id, merged);
-  state.requestIdToNodeId.set(incoming.requestId, merged.id);
-  state.requestIdToNodeId.set(merged.requestId, merged.id);
+  state.requestIdToNodeId.set(getRequestKey(incoming.requestId, incoming.targetId), merged.id);
+  state.requestIdToNodeId.set(getRequestKey(merged.requestId, merged.targetId), merged.id);
   indexDocument(state, merged);
   if (merged.treeId) {
     const tree = state.trees.get(merged.treeId);
@@ -420,7 +420,7 @@ function resolveParent(
     : undefined;
 
   if (initiatorReqId) {
-    const initiatorNodeId = state.requestIdToNodeId.get(initiatorReqId);
+    const initiatorNodeId = state.requestIdToNodeId.get(getRequestKey(initiatorReqId, node.targetId));
     if (initiatorNodeId && state.nodes.has(initiatorNodeId)) {
       const initiatorNode = state.nodes.get(initiatorNodeId)!;
       // Only trust initiator when it is part of this same navigation load.
@@ -527,6 +527,13 @@ function findActiveDocumentForTarget(
   return best?.id ?? tree.rootId;
 }
 
+/**
+ * Get the scoped key for requestIdToNodeId map (includes targetId).
+ */
+function getRequestKey(requestId: string, targetId?: string): string {
+  return targetId ? `${targetId}:${requestId}` : requestId;
+}
+
 let treeSeq = 0;
 
 function newTreeId(): string {
@@ -543,7 +550,8 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
   // Follow aliases for folded provisional nodes. Do NOT map by requestId alone:
   // Chrome redirect hops reuse the same CDP requestId with new node identities.
   const aliased = resolveCanonicalId(state, incoming.id);
-  const byRequest = state.requestIdToNodeId.get(incoming.requestId);
+  const requestKey = getRequestKey(incoming.requestId, incoming.targetId);
+  const byRequest = state.requestIdToNodeId.get(requestKey);
   let canonicalIncomingId = aliased;
   if (
     byRequest &&
@@ -637,7 +645,6 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
     const tree: Tree = {
       id: treeId,
       rootId: node.id,
-      originalRootId: node.id,
       targetId: node.targetId,
       createdAt: node.createdAt,
       updatedAt: node.updatedAt,
@@ -645,7 +652,7 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
     state.trees.set(treeId, tree);
     if (node.targetId) state.targetToActiveTree.set(node.targetId, treeId);
     state.nodes.set(node.id, node);
-    state.requestIdToNodeId.set(node.requestId, node.id);
+    state.requestIdToNodeId.set(getRequestKey(node.requestId, node.targetId), node.id);
     indexDocument(state, node);
     patches.push({
       op: "upsert",
@@ -667,7 +674,7 @@ export function integrateNode(state: TreeState, incoming: RrNode): TreePatch[] {
   parent.updatedAt = node.updatedAt;
   state.nodes.set(parent.id, parent);
   state.nodes.set(node.id, node);
-  state.requestIdToNodeId.set(node.requestId, node.id);
+  state.requestIdToNodeId.set(getRequestKey(node.requestId, node.targetId), node.id);
   indexDocument(state, node);
 
   if (node.treeId) {
@@ -739,7 +746,9 @@ export function getTreeSnapshot(state: TreeState, treeId: string) {
 }
 
 export function listTrees(state: TreeState) {
-  return [...state.trees.values()].map((t) => ({ ...t }));
+  return [...state.trees.values()]
+    .map((t) => ({ ...t }))
+    .sort((a, b) => a.createdAt - b.createdAt);
 }
 
 /** Remove one tree and all of its nodes; returns false if unknown. */
@@ -761,6 +770,9 @@ export function deleteTree(state: TreeState, treeId: string): boolean {
     if (n.frameId && state.frameToDocument.get(n.frameId) === id) {
       state.frameToDocument.delete(n.frameId);
     }
+    // Clean up scoped requestIdToNodeId entries
+    const requestKey = getRequestKey(n.requestId, n.targetId);
+    state.requestIdToNodeId.delete(requestKey);
     state.nodes.delete(id);
   }
 
@@ -803,36 +815,29 @@ export function resetTreeSeq(): void {
 }
 
 /**
- * Re-root a tree at a specific node. The new root becomes the specified node,
- * and only its descendants are kept in the tree view.
+ * Set the effective root for a tree. Only one effective root can be set at a time.
+ * The effective root is used as the starting point for JSON export.
  */
-export function rerootTree(state: TreeState, treeId: string, newRootId: string): boolean {
+export function setEffectiveRoot(state: TreeState, treeId: string, effectiveRootId: string): boolean {
   const tree = state.trees.get(treeId);
   if (!tree) return false;
 
-  const newRoot = state.nodes.get(newRootId);
-  if (!newRoot || newRoot.treeId !== treeId) return false;
+  const effectiveRoot = state.nodes.get(effectiveRootId);
+  if (!effectiveRoot || effectiveRoot.treeId !== treeId) return false;
 
-  // Store the original root if this is the first re-rooting
-  if (!tree.originalRootId) {
-    tree.originalRootId = tree.rootId;
-  }
-
-  tree.rootId = newRootId;
+  tree.effectiveRootId = effectiveRootId;
   tree.updatedAt = Date.now();
   return true;
 }
 
 /**
- * Reset a tree to its original root.
+ * Clear the effective root for a tree.
  */
-export function resetTree(state: TreeState, treeId: string): boolean {
+export function clearEffectiveRoot(state: TreeState, treeId: string): boolean {
   const tree = state.trees.get(treeId);
   if (!tree) return false;
 
-  if (!tree.originalRootId) return false; // No original root to reset to
-
-  tree.rootId = tree.originalRootId;
+  tree.effectiveRootId = undefined;
   tree.updatedAt = Date.now();
   return true;
 }
@@ -856,9 +861,9 @@ export function generateTreeJson(
     url: node.url,
     method: node.method,
     status: node.status,
-    requestHeaders: node.requestHeaders,
+    requestHeaders: filterRequestHeaders(node.requestHeaders),
     requestBody: node.requestBody,
-    responseHeaders: node.responseHeaders,
+    responseHeaders: filterResponseHeaders(node.responseHeaders),
     responseBody: node.responseBody,
     children: childrenJson,
   };
@@ -867,6 +872,10 @@ export function generateTreeJson(
 /**
  * Generate a JSON tree representation from root to selected node,
  * including only the direct path and siblings before the selected node at its level.
+ * 
+ * Respects the effective root if set. The effective root must be in the path
+ * from the selected node to the original root. If the effective root is not in the path,
+ * returns null to indicate the selected node is not under the effective root.
  */
 export function generatePartialTreeJsonImpl(
   state: TreeState,
@@ -876,7 +885,11 @@ export function generatePartialTreeJsonImpl(
   const selectedNode = state.nodes.get(selectedNodeId);
   if (!selectedNode) return null;
 
-  // Build path from selected node to root
+  // Get the effective root if set
+  const tree = selectedNode.treeId ? state.trees.get(selectedNode.treeId) : undefined;
+  const effectiveRootId = tree?.effectiveRootId;
+
+  // Build path from selected node to the original root using parentId
   const path: RrNode[] = [];
   let current: RrNode | undefined = selectedNode;
   while (current) {
@@ -886,8 +899,70 @@ export function generatePartialTreeJsonImpl(
 
   if (path.length === 0) return null;
 
-  // Build filtered JSON from root down
+  // If an effective root is set, check if it's in the path
+  if (effectiveRootId) {
+    const effectiveRootIndex = path.findIndex((n) => n.id === effectiveRootId);
+    if (effectiveRootIndex >= 0) {
+      // Filter the path to start from the effective root
+      path.splice(0, effectiveRootIndex);
+    } else {
+      // Effective root is not in the path via parentId
+      // Try to find it using children array (build path from root down)
+      const root = path[0]!;
+      const pathFromRoot = findPathFromRootToNode(state, root.id, selectedNodeId, effectiveRootId);
+      if (pathFromRoot) {
+        // Found path from root that includes effective root
+        return buildFilteredJson(state, pathFromRoot[0]!, pathFromRoot.slice(1), edgeTypeFilters);
+      }
+      // Effective root is not in the path, selected node is not under the effective root
+      return null;
+    }
+  }
+
+  // Build filtered JSON from the root down
   return buildFilteredJson(state, path[0]!, path.slice(1), edgeTypeFilters);
+}
+
+/**
+ * Helper function to find path from root to target using children array.
+ * Returns the path if the effective root is in the path, otherwise null.
+ */
+function findPathFromRootToNode(
+  state: TreeState,
+  rootId: string,
+  targetId: string,
+  effectiveRootId: string,
+): RrNode[] | null {
+  const root = state.nodes.get(rootId);
+  if (!root) return null;
+
+  const visited = new Set<string>();
+  const stack: { node: RrNode; path: RrNode[] }[] = [{ node: root, path: [] }];
+
+  while (stack.length > 0) {
+    const { node, path } = stack.pop()!;
+
+    if (node.id === targetId) {
+      // Check if effective root is in the path
+      if (path.some((n) => n.id === effectiveRootId)) {
+        return [...path, node];
+      }
+      return null;
+    }
+
+    if (visited.has(node.id)) continue;
+    visited.add(node.id);
+
+    // Add children to stack in reverse order to maintain order
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = state.nodes.get(node.children[i]);
+      if (child) {
+        stack.push({ node: child, path: [...path, node] });
+      }
+    }
+  }
+
+  return null;
 }
 
 function buildFilteredJson(
@@ -940,9 +1015,9 @@ function buildFilteredJson(
     url: currentNode.url,
     method: currentNode.method,
     status: currentNode.status,
-    requestHeaders: currentNode.requestHeaders,
+    requestHeaders: filterRequestHeaders(currentNode.requestHeaders),
     requestBody: currentNode.requestBody,
-    responseHeaders: currentNode.responseHeaders,
+    responseHeaders: filterResponseHeaders(currentNode.responseHeaders),
     responseBody: currentNode.responseBody,
     children: childrenJson,
   };
@@ -979,9 +1054,9 @@ function generateNodeWithPriorSiblingsForChild(
     url: parentNode.url,
     method: parentNode.method,
     status: parentNode.status,
-    requestHeaders: parentNode.requestHeaders,
+    requestHeaders: filterRequestHeaders(parentNode.requestHeaders),
     requestBody: parentNode.requestBody,
-    responseHeaders: parentNode.responseHeaders,
+    responseHeaders: filterResponseHeaders(parentNode.responseHeaders),
     responseBody: parentNode.responseBody,
     children: childrenJson,
   };
@@ -1025,12 +1100,90 @@ function generateNodeWithPriorSiblings(
     url: node.url,
     method: node.method,
     status: node.status,
-    requestHeaders: node.requestHeaders,
+    requestHeaders: filterRequestHeaders(node.requestHeaders),
     requestBody: node.requestBody,
-    responseHeaders: node.responseHeaders,
+    responseHeaders: filterResponseHeaders(node.responseHeaders),
     responseBody: node.responseBody,
     children: childrenJson,
   };
+}
+
+/**
+ * Filter request headers to only include crucial headers for successful request processing.
+ * Excludes HTTP/2 pseudo-headers, informational headers, and duplicates.
+ */
+function filterRequestHeaders(headers: Record<string, string>): Record<string, string> {
+  const crucialHeaders = new Set([
+    "content-type",
+    "authorization",
+    "cookie",
+    "accept",
+    "content-length",
+    "user-agent",
+    "referer",
+    "origin",
+    "host",
+  ]);
+
+  const filtered: Record<string, string> = {};
+  const seen = new Set<string>();
+
+  for (const [key, value] of Object.entries(headers)) {
+    const lowerKey = key.toLowerCase();
+    
+    // Skip HTTP/2 pseudo-headers
+    if (lowerKey.startsWith(":")) continue;
+    
+    // Skip non-crucial informational headers
+    if (!crucialHeaders.has(lowerKey)) continue;
+    
+    // Skip duplicates (case-insensitive)
+    if (seen.has(lowerKey)) continue;
+    
+    seen.add(lowerKey);
+    filtered[key] = value;
+  }
+
+  return filtered;
+}
+
+/**
+ * Filter response headers to only include crucial headers.
+ * Excludes informational headers and duplicates.
+ */
+function filterResponseHeaders(headers: Record<string, string>): Record<string, string> {
+  const crucialHeaders = new Set([
+    "content-type",
+    "content-length",
+    "location",
+    "set-cookie",
+    "cache-control",
+    "content-encoding",
+    "etag",
+    "last-modified",
+    "expires",
+    "content-disposition",
+    "access-control-allow-origin",
+    "access-control-allow-credentials",
+  ]);
+
+  const filtered: Record<string, string> = {};
+  const seen = new Set<string>();
+
+  for (const [key, value] of Object.entries(headers)) {
+    const lowerKey = key.toLowerCase();
+    
+    // Skip non-crucial informational headers
+    if (!crucialHeaders.has(lowerKey)) continue;
+    
+    // Skip duplicates (case-insensitive)
+    if (seen.has(lowerKey)) continue;
+    
+    seen.add(lowerKey);
+    filtered[key] = value;
+  }
+
+  return filtered;
 }
 
 function generateNodeJson(
@@ -1041,9 +1194,9 @@ function generateNodeJson(
     url: node.url,
     method: node.method,
     status: node.status,
-    requestHeaders: node.requestHeaders,
+    requestHeaders: filterRequestHeaders(node.requestHeaders),
     requestBody: node.requestBody,
-    responseHeaders: node.responseHeaders,
+    responseHeaders: filterResponseHeaders(node.responseHeaders),
     responseBody: node.responseBody,
     children: [],
   };
@@ -1070,9 +1223,9 @@ function generateFullNodeJson(
     url: node.url,
     method: node.method,
     status: node.status,
-    requestHeaders: node.requestHeaders,
+    requestHeaders: filterRequestHeaders(node.requestHeaders),
     requestBody: node.requestBody,
-    responseHeaders: node.responseHeaders,
+    responseHeaders: filterResponseHeaders(node.responseHeaders),
     responseBody: node.responseBody,
     children: childrenJson,
   };

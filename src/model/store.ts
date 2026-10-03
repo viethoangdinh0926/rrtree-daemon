@@ -9,8 +9,9 @@ import {
   integrateNode,
   listTrees,
   recordGesture,
-  resetTree,
-  rerootTree,
+  resetTreeSeq,
+  setEffectiveRoot,
+  clearEffectiveRoot,
   setMainFrame,
   type TreeState,
 } from "./tree-builder.js";
@@ -68,8 +69,8 @@ export class TreeStore extends EventEmitter {
     return count;
   }
 
-  rerootTree(treeId: string, newRootId: string): boolean {
-    const ok = rerootTree(this.state, treeId, newRootId);
+  setEffectiveRoot(treeId: string, effectiveRootId: string): boolean {
+    const ok = setEffectiveRoot(this.state, treeId, effectiveRootId);
     if (ok) {
       const patch: TreePatch = {
         op: "upsert",
@@ -81,8 +82,8 @@ export class TreeStore extends EventEmitter {
     return ok;
   }
 
-  resetTree(treeId: string): boolean {
-    const ok = resetTree(this.state, treeId);
+  clearEffectiveRoot(treeId: string): boolean {
+    const ok = clearEffectiveRoot(this.state, treeId);
     if (ok) {
       const patch: TreePatch = {
         op: "upsert",
