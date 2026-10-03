@@ -34,7 +34,16 @@ export function createApp(opts: ApiOptions): Express {
   app.use(express.json());
 
   const uiDir = resolveUiDir();
-  app.use(express.static(uiDir));
+  app.use(express.static(uiDir, {
+    setHeaders: (res, path) => {
+      // Disable caching for HTML files to force browser reload
+      if (path.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
+    }
+  }));
 
   app.get("/health", (_req, res) => {
     const cdp = opts.cdp.getStatus();

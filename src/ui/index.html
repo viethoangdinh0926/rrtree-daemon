@@ -267,6 +267,38 @@
         margin: 0;
         word-break: break-all;
       }
+      .filter-section {
+        margin-bottom: 0.75rem;
+        padding: 0.5rem;
+        background: var(--panel);
+        border-radius: 6px;
+        border: 1px solid var(--border);
+      }
+      .filter-label {
+        font-size: 0.72rem;
+        color: var(--muted);
+        margin-bottom: 0.4rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .filter-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+      .filter-option {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        font-size: 0.75rem;
+        cursor: pointer;
+      }
+      .filter-option input {
+        cursor: pointer;
+      }
+      .filter-option span {
+        text-transform: capitalize;
+      }
     </style>
   </head>
   <body>
@@ -289,6 +321,39 @@
       </aside>
       <section>
         <h2>Request tree</h2>
+        <div class="filter-section">
+          <div class="filter-label">Filter by edge type</div>
+          <div class="filter-options" id="edge-type-filters">
+            <label class="filter-option">
+              <input type="checkbox" value="redirect" checked>
+              <span>Redirect</span>
+            </label>
+            <label class="filter-option">
+              <input type="checkbox" value="parser" checked>
+              <span>Parser</span>
+            </label>
+            <label class="filter-option">
+              <input type="checkbox" value="script" checked>
+              <span>Script</span>
+            </label>
+            <label class="filter-option">
+              <input type="checkbox" value="script_nav" checked>
+              <span>Script Nav</span>
+            </label>
+            <label class="filter-option">
+              <input type="checkbox" value="user_interaction" checked>
+              <span>User Interaction</span>
+            </label>
+            <label class="filter-option">
+              <input type="checkbox" value="preload" checked>
+              <span>Preload</span>
+            </label>
+            <label class="filter-option">
+              <input type="checkbox" value="other" checked>
+              <span>Other</span>
+            </label>
+          </div>
+        </div>
         <div id="tree-view"></div>
       </section>
       <article>
@@ -303,6 +368,7 @@
         selectedTreeId: null,
         selectedNodeId: null,
         collapsed: new Set(),
+        edgeTypeFilters: new Set(["redirect", "parser", "script", "script_nav", "user_interaction", "preload", "other"]),
       };
 
       const el = {
@@ -312,6 +378,7 @@
         detail: document.getElementById("detail"),
         btnDeleteSelected: document.getElementById("btn-delete-selected"),
         btnClearAll: document.getElementById("btn-clear-all"),
+        edgeTypeFilters: document.getElementById("edge-type-filters"),
       };
 
       async function refreshTrees() {
@@ -483,6 +550,10 @@
           el.treeView.innerHTML = `<p class="meta">Empty tree</p>`;
           return;
         }
+        if (!isNodeVisible(root, 0)) {
+          el.treeView.innerHTML = `<p class="meta">No nodes match the current filter</p>`;
+          return;
+        }
         el.treeView.innerHTML = renderNodeHtml(root, nodes, 0);
         el.treeView.querySelectorAll(".node").forEach((n) => {
           n.addEventListener("click", (e) => {
@@ -504,11 +575,18 @@
         });
       }
 
+      function isNodeVisible(node, depth) {
+        const edgeType = node.edgeType || (depth === 0 ? "other" : null);
+        if (!edgeType) return true;
+        return state.edgeTypeFilters.has(edgeType);
+      }
+
       function renderNodeHtml(node, nodes, depth) {
         const kids = (node.children || [])
           .map((cid) => nodes.get(cid))
           .filter(Boolean);
-        const hasKids = kids.length > 0;
+        const visibleKids = kids.filter(k => isNodeVisible(k, depth + 1));
+        const hasKids = visibleKids.length > 0;
         const collapsed = state.collapsed.has(node.id);
         const selected = node.id === state.selectedNodeId ? "selected" : "";
         const edge = node.edgeType
@@ -529,7 +607,7 @@
           <div class="meta">${escapeHtml(String(node.resourceType))} · ${status}${node.mimeType ? " · " + escapeHtml(node.mimeType) : ""}</div>
         </div>`;
         if (hasKids && !collapsed) {
-          html += `<div class="children">${kids.map((k) => renderNodeHtml(k, nodes, depth + 1)).join("")}</div>`;
+          html += `<div class="children">${visibleKids.map((k) => renderNodeHtml(k, nodes, depth + 1)).join("")}</div>`;
         }
         return html;
       }
@@ -726,6 +804,17 @@
         });
         el.btnClearAll.addEventListener("click", () => {
           void clearAllTrees();
+        });
+
+        el.edgeTypeFilters.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
+          checkbox.addEventListener("change", () => {
+            if (checkbox.checked) {
+              state.edgeTypeFilters.add(checkbox.value);
+            } else {
+              state.edgeTypeFilters.delete(checkbox.value);
+            }
+            renderTree();
+          });
         });
 
         const es = new EventSource("/events");
