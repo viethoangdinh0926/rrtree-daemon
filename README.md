@@ -1,6 +1,6 @@
 # rrtree-daemon
 
-Linux daemon that attaches to **Google Chrome / Chromium** over the **Chrome DevTools Protocol (CDP)** and builds **live request–response causality trees**.
+Cross-platform daemon that attaches to **Google Chrome / Chromium** over the **Chrome DevTools Protocol (CDP)** and builds **live request–response causality trees**.
 
 **One tree per tab.** While a tab already has a tree, every further navigation is attached inside it — a second root is never created for the same target. A tab roots a new tree only when it has none yet (or after its tree was deleted), and then only for:
 
@@ -195,21 +195,38 @@ While waiting for Chrome, `cdp.state` is `"scanning"` and `attachedTargets` is e
 ## API
 
 
-| Method   | Path              | Description                                                                               |
-| -------- | ----------------- | ----------------------------------------------------------------------------------------- |
-| `GET`    | `/health`         | Attachment + tree counts                                                                  |
-| `GET`    | `/trees`          | List trees                                                                                |
-| `GET`    | `/trees/:id`      | One tree + all nodes (includes headers/bodies)                                            |
-| `DELETE` | `/trees/:id`      | Delete one tree and its nodes                                                             |
-| `DELETE` | `/trees`          | Delete all trees                                                                          |
-| `GET`    | `/nodes`          | All nodes                                                                                 |
-| `GET`    | `/nodes/:id`      | Single node with full request/response detail                                             |
-| `GET`    | `/nodes/:id/curl` | Minimal `curl` for the node’s request                                                     |
-| `GET`    | `/events`         | SSE stream of `{ op, treeId?, node? }` patches (`upsert` / `attach` / `delete` / `clear`) |
-| `POST`   | `/attach`         | `{ "targetId": "…" }` force-attach a page                                                 |
+| Method   | Path                        | Description                                                                               |
+| -------- | --------------------------- | ----------------------------------------------------------------------------------------- |
+| `GET`    | `/health`                   | Attachment + tree counts                                                                  |
+| `GET`    | `/trees`                    | List trees                                                                                |
+| `GET`    | `/trees/:id`                | One tree + all nodes (includes headers/bodies)                                            |
+| `DELETE` | `/trees/:id`                | Delete one tree and its nodes                                                             |
+| `DELETE` | `/trees`                    | Delete all trees                                                                          |
+| `POST`   | `/trees/:id/effective-root` | Set a node as the effective root for JSON export                                         |
+| `DELETE` | `/trees/:id/effective-root` | Clear the effective root                                                                    |
+| `GET`    | `/trees/:id/json`           | Full tree JSON export                                                                      |
+| `GET`    | `/nodes`                    | All nodes                                                                                 |
+| `GET`    | `/nodes/:id`                | Single node with full request/response detail                                             |
+| `GET`    | `/nodes/:id/curl`           | Minimal `curl` for the node's request                                                     |
+| `GET`    | `/nodes/:id/partial-json`   | Partial tree JSON from selected node to root (respects effective root)                 |
+| `GET`    | `/events`                   | SSE stream of `{ op, treeId?, node? }` patches (`upsert` / `attach` / `delete` / `clear`) |
+| `POST`   | `/attach`                   | `{ "targetId": "…" }` force-attach a page                                                 |
 
 
 In the UI: use **×** on a tree row, **Delete selected**, or **Clear all**. Select a node and use **Copy curl** for a minimal replay command (keeps only crucial headers such as `Authorization`, `Content-Type`, `Cookie`, `Accept`, and common API/CSRF tokens).
+
+### Effective Root
+
+The UI supports marking any node as an "effective root" for JSON export:
+- Right-click a node and select "Set effective root" to mark it
+- The effective root is marked with a gold star (★) in the tree view
+- When exporting JSON from a node, the export starts from the effective root (if in the path) instead of the original tree root
+- Use the "Reset tree" button to clear the effective root
+- If the selected node is not under the effective root, an error modal will appear instead of exporting
+
+### Edge Type Filters
+
+The UI allows filtering nodes by edge type (redirect, parser, script, script_nav, user_interaction, preload, other). Filter settings persist across page refreshes.
 
 ### Node payload (headers & bodies)
 
@@ -252,14 +269,14 @@ npm run validate:live # headless Chrome end-to-end scenarios
 
 ---
 
-## Known limitations (v0)
-
-- SPA soft navigations without a Document request are not new tree roots.
-- User-gesture attribution is heuristic (injected click/keydown hooks + time window).
-- Attaching CDP shows Chrome’s debugging banner and can conflict with DevTools on the same target.
-- Not a Brave PageGraph-level DOM attribution system.
-
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md).
 
+## Known limitations
+
+- SPA soft navigations without a Document request are not new tree roots.
+- User-gesture attribution is heuristic (injected click/keydown hooks + time window).
+- Attaching CDP shows Chrome's debugging banner and can conflict with DevTools on the same target.
+- Not a Brave PageGraph-level DOM attribution system.
+- Effective root for JSON export works only when the selected node is in the path from the original root to the effective root. If the effective root is not in the path, JSON export will fail.
