@@ -222,6 +222,12 @@
       .edge.preload {
         background: var(--preload);
       }
+      .effective-root {
+        display: inline-block;
+        font-size: 0.9rem;
+        margin-right: 0.35rem;
+        color: #ffd700;
+      }
       .url {
         word-break: break-all;
         font-size: 0.82rem;
@@ -492,7 +498,7 @@
     </main>
 
     <div id="context-menu" class="context-menu">
-      <button type="button" id="ctx-reroot">Re-root tree here</button>
+      <button type="button" id="ctx-reroot">Set effective root</button>
       <button type="button" id="ctx-export-json">Export tree as JSON</button>
     </div>
 
@@ -508,6 +514,21 @@
         <div class="modal-footer">
           <button type="button" id="modal-copy" class="primary">Copy to clipboard</button>
           <button type="button" id="modal-cancel">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="error-modal" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <h3 class="modal-title">Error</h3>
+          <button type="button" class="modal-close" id="error-modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <p id="error-message"></p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="error-modal-ok" class="primary">OK</button>
         </div>
       </div>
     </div>
@@ -542,6 +563,10 @@
         modalClose: document.getElementById("modal-close"),
         modalCopy: document.getElementById("modal-copy"),
         modalCancel: document.getElementById("modal-cancel"),
+        errorModal: document.getElementById("error-modal"),
+        errorMessage: document.getElementById("error-message"),
+        errorModalClose: document.getElementById("error-modal-close"),
+        errorModalOk: document.getElementById("error-modal-ok"),
       };
 
       async function refreshTrees() {
@@ -736,7 +761,7 @@
           el.treeView.innerHTML = `<p class="meta">No nodes match the current filter</p>`;
           return;
         }
-        el.treeView.innerHTML = renderNodeHtml(root, nodes, 0);
+        el.treeView.innerHTML = renderNodeHtml(root, nodes, 0, tree);
         el.treeView.querySelectorAll(".node").forEach((n) => {
           n.addEventListener("click", (e) => {
             e.stopPropagation();
@@ -771,7 +796,7 @@
         return state.edgeTypeFilters.has(edgeType);
       }
 
-      function renderNodeHtml(node, nodes, depth) {
+      function renderNodeHtml(node, nodes, depth, tree) {
         const kids = (node.children || [])
           .map((cid) => nodes.get(cid))
           .filter(Boolean);
@@ -779,6 +804,7 @@
         const hasKids = visibleKids.length > 0;
         const collapsed = state.collapsed.has(node.id);
         const selected = node.id === state.selectedNodeId ? "selected" : "";
+        const isEffectiveRoot = tree && node.id === tree.effectiveRootId;
         
         let edge;
         if (node.edgeType) {
@@ -805,13 +831,14 @@
           : `<span class="toggle"> </span>`;
         
         const mimeTypeHtml = node.mimeType ? " · " + escapeHtml(node.mimeType) : "";
+        const effectiveRootHtml = isEffectiveRoot ? `<span class="effective-root">★</span>` : "";
         
         let html = `<div class="node ${selected}" data-id="${node.id}">
-          <div>${toggleHtml}${edge}<span class="url">${escapeHtml(node.method)} ${escapeHtml(shortUrl(node.url))}</span></div>
+          <div>${toggleHtml}${edge}${effectiveRootHtml}<span class="url">${escapeHtml(node.method)} ${escapeHtml(shortUrl(node.url))}</span></div>
           <div class="meta">${escapeHtml(String(node.resourceType))} · ${status}${mimeTypeHtml}</div>
         </div>`;
         if (hasKids && !collapsed) {
-          html += `<div class="children">${visibleKids.map((k) => renderNodeHtml(k, nodes, depth + 1)).join("")}</div>`;
+          html += `<div class="children">${visibleKids.map((k) => renderNodeHtml(k, nodes, depth + 1, tree)).join("")}</div>`;
         }
         return html;
       }
@@ -1046,6 +1073,15 @@
         el.jsonModal.style.display = "none";
       }
 
+      function showError(message) {
+        el.errorMessage.textContent = message;
+        el.errorModal.style.display = "flex";
+      }
+
+      function hideErrorModal() {
+        el.errorModal.style.display = "none";
+      }
+
       async function setEffectiveRootAtNode(nodeId) {
         if (!state.selectedTreeId || !nodeId) return;
         const res = await fetch(`/trees/${encodeURIComponent(state.selectedTreeId)}/effective-root`, {
@@ -1057,9 +1093,15 @@
           el.status.textContent = "Set effective root failed";
           return;
         }
-        await loadTree(state.selectedTreeId);
+        // Manually update local tree state to set effectiveRootId
+        const tree = state.trees.find((t) => t.id === state.selectedTreeId);
+        if (tree) {
+          tree.effectiveRootId = nodeId;
+        }
         renderTreeList();
         renderTree();
+        // Update button state
+        el.btnResetTree.disabled = false;
         el.status.textContent = `live · ${state.trees.length} trees`;
       }
 
@@ -1072,13 +1114,15 @@
           el.status.textContent = "Clear effective root failed";
           return;
         }
-        await loadTree(state.selectedTreeId);
+        // Manually update local tree state to clear effectiveRootId
+        const tree = state.trees.find((t) => t.id === state.selectedTreeId);
+        if (tree) {
+          tree.effectiveRootId = undefined;
+        }
         renderTreeList();
         renderTree();
-        // Explicitly update button state
-        const tree = state.trees.find((t) => t.id === state.selectedTreeId);
-        const canReset = !!tree?.effectiveRootId;
-        el.btnResetTree.disabled = !canReset;
+        // Update button state
+        el.btnResetTree.disabled = true;
         el.status.textContent = `live · ${state.trees.length} trees`;
       }
 
@@ -1088,10 +1132,15 @@
         const url = `/nodes/${encodeURIComponent(state.contextMenuNodeId)}/partial-json?filters=${encodeURIComponent(filtersParam)}`;
         const res = await fetch(url);
         if (!res.ok) {
-          el.status.textContent = "Export failed";
+          const errorData = await res.json().catch(() => ({ error: "Export failed" }));
+          showError(errorData.error || "Export failed");
           return;
         }
         const data = await res.json();
+        if (!data.json) {
+          showError("Cannot generate JSON: selected node is not under the effective root");
+          return;
+        }
         showModal(data.json);
       }
 
@@ -1155,6 +1204,10 @@
             el.modalCopy.textContent = "Copy failed";
           }
         });
+
+        // Error modal handlers
+        el.errorModalClose.addEventListener("click", hideErrorModal);
+        el.errorModalOk.addEventListener("click", hideErrorModal);
 
         // Close modal on overlay click
         el.jsonModal.addEventListener("click", (e) => {

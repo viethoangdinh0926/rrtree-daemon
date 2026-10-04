@@ -172,7 +172,7 @@ export function createApp(opts: ApiOptions): Express {
     const edgeTypeFilters = filtersParam ? new Set(filtersParam.split(",")) : undefined;
     const json = opts.store.generatePartialTreeJson(req.params.id, edgeTypeFilters);
     if (!json) {
-      res.status(404).json({ error: "node not found" });
+      res.status(400).json({ error: "Cannot generate JSON: selected node is not under the effective root" });
       return;
     }
     res.json({ json });

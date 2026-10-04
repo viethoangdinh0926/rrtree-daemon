@@ -117,44 +117,18 @@ chromium \
   --user-data-dir=/tmp/rrtree-chrome
 ```
 
-### Windows (CMD) — simplest on Windows 11
+### Windows
 
-Open **Command Prompt** (not PowerShell) and run:
+Open **Command Prompt** and run:
 
 ```bat
 "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir=%TEMP%\rrtree-chrome
 ```
 
-### Windows (PowerShell)
-
-PowerShell treats bare `--flags` as its `--` operator. Use the call operator `&` and quote each argument:
-
-```powershell
-& "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" `
-  "--remote-debugging-port=9222" `
-  "--user-data-dir=$env:TEMP\rrtree-chrome"
-```
-
-Or stop PowerShell parsing with `--%`:
-
-```powershell
-& "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" --% --remote-debugging-port=9222 --user-data-dir=%TEMP%\rrtree-chrome
-```
-
-Or use `Start-Process`:
-
-```powershell
-Start-Process "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" `
-  -ArgumentList @(
-    "--remote-debugging-port=9222",
-    "--user-data-dir=$env:TEMP\rrtree-chrome"
-  )
-```
-
 If Chrome is installed only for your user, replace the path with:
 
-```powershell
-"$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+```bat
+"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir=%TEMP%\rrtree-chrome
 ```
 
 ### Verify Chrome is exposing CDP
@@ -289,33 +263,3 @@ npm run validate:live # headless Chrome end-to-end scenarios
 
 See [docs/architecture.md](docs/architecture.md).
 
-## Agent knowledge (OKF + CodeGraph)
-
-Coding agents (Cursor, Devin, etc.) should follow `[AGENTS.md](AGENTS.md)`:
-
-
-| Layer                            | Role                                                                                                           |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **OKF** (`[okf/](okf/index.md)`) | Product context — causality, API, ops, known issues. **Committed** in git. Update when business logic changes. |
-| **CodeGraph** (`.codegraph/`)    | Structural navigation — symbols and call chains. Prefer over blind grep. Agents must run `codegraph index` after codebase changes. |
-
-
-These are complementary, not mutually exclusive. Agents must **drift-check** for manual/out-of-band code edits and refresh stale OKF/CodeGraph **before** consulting either layer — see [`AGENTS.md`](AGENTS.md). Start at [`okf/index.md`](okf/index.md); see [maintain OKF playbook](okf/playbooks/maintain-okf.md). Project rules live under [`.cursor/rules/`](.cursor/rules/) and [`.devin/rules/`](.devin/rules/).
-
-### Set up CodeGraph on a new machine
-
-Each new dev environment needs its own CodeGraph install and index. The SQLite DB (`.codegraph/codegraph.db`) is **gitignored** and is not shared via clone. The daemon itself does not require CodeGraph; only agent-assisted coding benefits from it.
-
-Requires **Node.js 22+** for CodeGraph’s native SQLite bindings.
-
-```bash
-# From the repo root
-npm install -g @colbymchenry/codegraph
-codegraph status
-codegraph init          # once per clone (use -i for interactive)
-codegraph index         # builds .codegraph/codegraph.db
-```
-
-After any codebase change in an agent session, run `codegraph index` again so the local graph stays current (skip only if CodeGraph is not installed).
-
-Optional: wire CodeGraph MCP into Cursor / Devin / Claude Code — see [docs/install_kg.md](docs/install_kg.md).
